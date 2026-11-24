@@ -164,10 +164,40 @@ namespace Metronome
         return out;
     }
 
-    // Woodblock click: a falling tone plus a short noise burst, beatPos = seconds since the click.
-    inline float clickSampleValue (double beatPos, bool accent, Random& rng)
+    enum class Sound { woodblock, beep, clave, cowbell };
+    inline const StringArray soundNames { "Woodblock", "Beep", "Clave", "Cencerro" };
+    constexpr double clickLength = 0.03; // every sound fits in 30 ms
+
+    // One click sample, beatPos = seconds since the click (silence outside [0, 30 ms)).
+    inline float clickSampleValue (double beatPos, bool accent, Random& rng, Sound sound = Sound::woodblock)
     {
-        constexpr double decay = 0.03, noiseDur = 0.005;
+        if (beatPos < 0 || beatPos >= clickLength)
+            return 0;
+
+        const double t = beatPos, fade = 1 - t / clickLength; // fade keeps the 30 ms cut silent
+        auto sine = [t] (double f) { return std::sin (MathConstants<double>::twoPi * f * t); };
+
+        switch (sound)
+        {
+            case Sound::beep: // classic digital metronome: pure tone, accent a fifth higher
+                return (float) (sine (accent ? 1980 : 1320) * jmin (1.0, t / 0.001) * std::exp (-t / 0.008) * fade * (accent ? 0.6 : 0.45));
+
+            case Sound::clave: // dry, bright wood hit
+                return (float) ((sine (accent ? 3000 : 2500) * std::exp (-t / 0.006) + (rng.nextDouble() * 2 - 1) * std::exp (-t / 0.0015) * 0.3)
+                                * fade * (accent ? 0.7 : 0.5));
+
+            case Sound::cowbell: // two inharmonic square-ish partials
+            {
+                auto sq = [] (double v) { return std::tanh (4 * v); };
+                const double k = accent ? 1.25 : 1.0;
+                return (float) ((sq (sine (540 * k)) + sq (sine (800 * k))) * 0.5 * std::exp (-t / 0.012) * fade * (accent ? 0.55 : 0.4));
+            }
+
+            case Sound::woodblock: break;
+        }
+
+        // Woodblock (Electron's): a falling tone plus a short noise burst.
+        constexpr double decay = clickLength, noiseDur = 0.005;
         double sample = 0;
         if (beatPos >= 0 && beatPos < decay)
         {
@@ -183,7 +213,7 @@ namespace Metronome
     // Count-in on the master bus: before `gateEnd` the song is silenced and only `cs` is heard.
     // `blockStart` is the edit time of buffer sample `start`.
     inline void renderCountIn (AudioBuffer<float>& buf, int start, int num, double blockStart, double sampleRate,
-                               const std::vector<Click>& cs, double gateEnd, Random& rng)
+                               const std::vector<Click>& cs, double gateEnd, Random& rng, Sound sound = Sound::woodblock)
     {
         for (int i = 0; i < num; ++i)
         {
@@ -193,7 +223,7 @@ namespace Metronome
 
             float v = 0;
             for (auto& c : cs)
-                v += clickSampleValue (t - c.time, c.accent, rng);
+                v += clickSampleValue (t - c.time, c.accent, rng, sound);
 
             for (int ch = 0; ch < buf.getNumChannels(); ++ch)
                 buf.setSample (ch, start + i, v);
@@ -201,19 +231,20 @@ namespace Metronome
     }
 
     // Mono 16-bit WAV of the clicks, `duration` seconds long.
-    inline bool renderWav (const std::vector<Click>& cs, double duration, const File& out, double sampleRate = 44100)
+    inline bool renderWav (const std::vector<Click>& cs, double duration, const File& out,
+                           Sound sound = Sound::woodblock, double sampleRate = 44100)
     {
         AudioBuffer<float> buf (1, jmax (1, (int) std::ceil (duration * sampleRate)));
         buf.clear();
         Random rng (1); // fixed seed: same file every time
 
-        const int clickLen = (int) std::ceil (0.03 * sampleRate);
+        const int clickLen = (int) std::ceil (clickLength * sampleRate);
         for (auto& c : cs)
         {
             const int start = (int) std::round (c.time * sampleRate);
             for (int i = 0; i < clickLen && start + i < buf.getNumSamples(); ++i)
                 if (start + i >= 0)
-                    buf.addSample (0, start + i, clickSampleValue (i / sampleRate, c.accent, rng));
+                    buf.addSample (0, start + i, clickSampleValue (i / sampleRate, c.accent, rng, sound));
         }
 
         out.deleteFile();

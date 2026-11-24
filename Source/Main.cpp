@@ -22,7 +22,7 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
         speedLabel.setText ("Velocidad", dontSendNotification);
@@ -40,6 +40,15 @@ public:
         }
 
         countInBox.addItemList ({ "Sin count-in", "Count-in 1 compás", "Count-in 2 compases" }, 1);
+
+        soundBox.addItemList (Metronome::soundNames, 1);
+        soundBox.setTooltip ("Sonido del metrónomo y del count-in");
+        soundBox.setSelectedItemIndex (settings.getIntValue ("clickSound", 0), dontSendNotification);
+        soundBox.onChange = [this]
+        {
+            settings.setValue ("clickSound", soundBox.getSelectedItemIndex());
+            refreshClickTrack();
+        };
         countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
@@ -80,6 +89,7 @@ public:
             b->setBounds (top.removeFromLeft (w).reduced (2));
         auto row = r.removeFromTop (30);
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
+        soundBox.setBounds (row.removeFromLeft (120).reduced (2));
         speedLabel.setBounds (row.removeFromLeft (70));
         speedSlider.setBounds (row.removeFromLeft (260));
         pitchLabel.setBounds (row.removeFromLeft (40));
@@ -100,7 +110,36 @@ private:
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
-    ComboBox countInBox;
+    ComboBox countInBox, soundBox;
+    std::optional<Library::Song> currentSong;
+    File currentEditFile;
+
+    // App-wide preferences (~/.config/Velody/Velody.settings).
+    PropertiesFile settings { []
+    {
+        PropertiesFile::Options o;
+        o.applicationName = "Velody";
+        o.filenameSuffix = "settings";
+        o.folderName = "Velody";
+        return o;
+    }() };
+
+    Metronome::Sound clickSound() const { return (Metronome::Sound) jlimit (0, Metronome::soundNames.size() - 1, soundBox.getSelectedItemIndex()); }
+
+    // Re-rendered on every open (and sound change) so a downbeat fixed in the Electron app shows up here too.
+    void refreshClickTrack()
+    {
+        if (edit == nullptr || ! currentSong.has_value())
+            return;
+
+        auto clickWav = currentEditFile.getSiblingFile (currentEditFile.getFileNameWithoutExtension() + " - metronomo.wav");
+        edit->getTransport().stop (false, false); // the WAV is about to be rewritten
+        if (SongEdit::writeClickWav (engine, *currentSong, clickWav, clickSound()))
+        {
+            SongEdit::setClickTrack (*edit, clickWav);
+            SongEdit::setPractice (*edit, speed(), semitones()); // the new clip starts at 100 %
+        }
+    }
     Label speedLabel, pitchLabel;
     Slider speedSlider, pitchSlider;
     double appliedSpeed = 1;
@@ -134,10 +173,8 @@ private:
         if (isNew && song != nullptr)
             SongEdit::addStemTracks (*edit, song->stems);
 
-        // Re-rendered on every open so a downbeat fixed in the Electron app shows up here too.
-        auto clickWav = f.getSiblingFile (f.getFileNameWithoutExtension() + " - metronomo.wav");
-        if (song != nullptr && SongEdit::writeClickWav (engine, *song, clickWav))
-            SongEdit::setClickTrack (*edit, clickWav);
+        currentEditFile = f;
+        currentSong = song != nullptr ? std::optional<Library::Song> (*song) : std::nullopt;
 
         songMeta = song != nullptr ? Metronome::readMeta (song->dir) : Metronome::SongMeta();
         countIn = CountInPlugin::findOrInsert (*edit);
@@ -150,6 +187,7 @@ private:
         pitchSlider.setValue (Metronome::clampSemitones (edit->state.getProperty (pitchProp, songMeta.transposeSemitones)), dontSendNotification);
         speedSlider.setEnabled (song != nullptr);
         pitchSlider.setEnabled (song != nullptr);
+        refreshClickTrack(); // also applies the speed/pitch to the new click clip
         applyPractice();
 
         edit->playInStopEnabled = true;
@@ -162,6 +200,7 @@ private:
         editComponent->getEditViewState().showFooters = true; // footer = plugin chain with "+" button
         editComponent->getEditViewState().showWaveDevices = true;
         addAndMakeVisible (*editComponent);
+        fitViewToSong();
         mixer.setEdit (edit.get());
         resized();
         refreshButtons();
@@ -230,7 +269,7 @@ private:
         if (countIn != nullptr && ! clicks.empty())
         {
             countInFrom = t.getPosition().inSeconds();
-            countIn->arm (clicks, countInFrom);
+            countIn->arm (clicks, countInFrom, clickSound());
 
             // The transport only allows negative positions down to its own count-in length (2 bars at
             // the edit's 120 bpm + 0.5 s = -4.5 s), so set that just for this jump.
@@ -263,7 +302,20 @@ private:
         SongEdit::setPractice (*edit, speed(), semitones());
         t.setPosition (te::TimePosition::fromSeconds (songPos / speed()));
         appliedSpeed = speed();
+        fitViewToSong(); // the song got longer/shorter
         refreshButtons();
+    }
+
+    // The example timeline shows a fixed 0–60 s and never scrolls, so the playhead vanished past
+    // the first minute. Show the whole song instead (empty project keeps 60 s).
+    void fitViewToSong()
+    {
+        if (editComponent == nullptr)
+            return;
+
+        auto& v = editComponent->getEditViewState();
+        v.viewX1 = te::TimePosition();
+        v.viewX2 = te::TimePosition::fromSeconds (jmax (60.0, edit->getLength().inSeconds() * 1.02));
     }
 
     // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed (not monitored),

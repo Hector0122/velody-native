@@ -112,6 +112,50 @@ struct MetronomeTests : UnitTest
         dir.deleteRecursively();
 
         testCountIn();
+        testSounds();
+    }
+
+    void testSounds()
+    {
+        using namespace Metronome;
+        const double sr = 44100;
+
+        auto render = [&] (Sound sound, bool accent)
+        {
+            AudioBuffer<float> b (1, (int) (0.05 * sr));
+            Random rng (1);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.setSample (0, i, clickSampleValue (i / sr, accent, rng, sound));
+            return b;
+        };
+
+        for (int k = 0; k < soundNames.size(); ++k)
+        {
+            beginTest ("sound " + soundNames[k] + ": audible, within 30 ms, no clipping, accent louder or brighter");
+            auto sound = (Sound) k;
+            auto normal = render (sound, false), accent = render (sound, true);
+            expectGreaterThan (normal.getMagnitude (0, 0, (int) (0.01 * sr)), 0.1f);
+            expectLessOrEqual (accent.getMagnitude (0, 0, normal.getNumSamples()), 1.0f);
+            expectEquals (normal.getMagnitude (0, (int) (clickLength * sr) + 1, normal.getNumSamples() - (int) (clickLength * sr) - 1), 0.0f);
+
+            // Accent must differ from the normal click (that's how you hear the "1").
+            float diff = 0;
+            for (int i = 0; i < normal.getNumSamples(); ++i)
+                diff = jmax (diff, std::abs (normal.getSample (0, i) - accent.getSample (0, i)));
+            expectGreaterThan (diff, 0.05f);
+        }
+
+        beginTest ("the chosen sound reaches the click WAV");
+        auto dir = File::createTempFile ("velody-sounds");
+        dir.createDirectory();
+        auto a = dir.getChildFile ("a.wav"), b = dir.getChildFile ("b.wav");
+        expect (renderWav ({ { 0.1, true } }, 0.5, a, Sound::woodblock));
+        expect (renderWav ({ { 0.1, true } }, 0.5, b, Sound::beep));
+        MemoryBlock ma, mb;
+        a.loadFileAsData (ma);
+        b.loadFileAsData (mb);
+        expect (ma.getSize() == mb.getSize() && ma != mb);
+        dir.deleteRecursively();
     }
 
     void testCountIn()

@@ -22,9 +22,10 @@ public:
     void initialise (const te::PluginInitialisationInfo& info) override { sampleRate = info.sampleRate; }
     void deinitialise() override {}
 
-    void arm (std::vector<Metronome::Click> cs, double until)
+    void arm (std::vector<Metronome::Click> cs, double until, Metronome::Sound s = Metronome::Sound::woodblock)
     {
         const SpinLock::ScopedLockType sl (lock);
+        sound = s;
         clicks = std::move (cs);
         gateEnd = until;
         armed = true;
@@ -54,7 +55,7 @@ public:
             return;
         }
 
-        Metronome::renderCountIn (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples, t0, sampleRate, clicks, gateEnd, rng);
+        Metronome::renderCountIn (*fc.destBuffer, fc.bufferStartSample, fc.bufferNumSamples, t0, sampleRate, clicks, gateEnd, rng, sound);
     }
 
     static CountInPlugin* findOrInsert (te::Edit& edit)
@@ -73,6 +74,7 @@ private:
     SpinLock lock;
     std::vector<Metronome::Click> clicks;
     double gateEnd = 0, sampleRate = 44100;
+    Metronome::Sound sound = Metronome::Sound::woodblock;
     std::atomic<bool> armed { false };
     Random rng { 2 };
 };

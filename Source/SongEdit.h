@@ -61,7 +61,8 @@ namespace SongEdit
 
     // Renders the song's metronome (from its .velody analysis) to `wav`, as long as its longest stem.
     // False when the song hasn't been analyzed yet (no BPM), so there's nothing to click.
-    inline bool writeClickWav (te::Engine& engine, const Library::Song& song, const File& wav)
+    inline bool writeClickWav (te::Engine& engine, const Library::Song& song, const File& wav,
+                               Metronome::Sound sound = Metronome::Sound::woodblock)
     {
         auto meta = Metronome::readMeta (song.dir);
         double duration = 0;
@@ -69,7 +70,7 @@ namespace SongEdit
             duration = jmax (duration, te::AudioFile (engine, f).getLength());
 
         auto cs = Metronome::clicks (meta, duration);
-        if (cs.empty() || ! Metronome::renderWav (cs, duration, wav))
+        if (cs.empty() || ! Metronome::renderWav (cs, duration, wav, sound))
             return false;
 
         engine.getAudioFileManager().forceFileUpdate (te::AudioFile (engine, wav)); // drop cached length/thumbnail
