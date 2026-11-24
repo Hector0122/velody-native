@@ -1,0 +1,152 @@
+#pragma once
+#include <JuceHeader.h>
+
+// Port of the Electron metronome (velody/src/renderer/src/hooks/downbeat.ts, metronomeClicks, and
+// handlers.ts clickSampleValue) so a song clicks on the same beats with the same accents.
+namespace Metronome
+{
+    constexpr int beatsPerBar = 4;
+
+    inline int mod (int n, int m) { return ((n % m) + m) % m; }
+
+    // The analysis fields of a song's .velody sidecar.
+    struct SongMeta
+    {
+        double bpm = 0, firstBeatOffset = 0;
+        std::vector<double> beatTimes;
+        int downbeatShift = 0; // manual "this is the 1" wins over the detected one
+    };
+
+    inline SongMeta readMeta (const File& songDir)
+    {
+        SongMeta m;
+        auto json = JSON::parse (songDir.getChildFile (".velody"));
+        if (! json.isObject())
+            return m;
+
+        m.bpm = json["bpm"];
+        m.firstBeatOffset = json["firstBeatOffset"];
+        if (auto* beats = json["beatTimes"].getArray())
+            for (auto& b : *beats)
+                m.beatTimes.push_back (b);
+
+        auto shift = json["downbeatShift"].isVoid() || json["downbeatShift"].isUndefined()
+                       ? json["detectedDownbeatShift"] : json["downbeatShift"];
+        m.downbeatShift = shift.isDouble() || shift.isInt() || shift.isInt64() ? mod (roundToInt ((double) shift), beatsPerBar) : 0;
+        return m;
+    }
+
+    inline bool isGridAccent (int idx, int shift)     { return mod (idx - shift, beatsPerBar) == 0; }
+    inline bool isConstantAccent (int beat, int shift) { return mod (beat - 1 - shift, beatsPerBar) == 0; }
+
+    inline double medianBeatGap (const std::vector<double>& t, double fallback)
+    {
+        if (t.size() < 2)
+            return fallback;
+        std::vector<double> gaps;
+        for (size_t i = 1; i < t.size(); ++i)
+            gaps.push_back (t[i] - t[i - 1]);
+        std::sort (gaps.begin(), gaps.end());
+        return gaps[gaps.size() >> 1];
+    }
+
+    // Least-squares line through each beat's ±radius neighbours: removes librosa's frame jitter.
+    inline std::vector<double> smoothBeatGrid (const std::vector<double>& t, int radius = 4)
+    {
+        const int n = (int) t.size();
+        if (n < 3)
+            return t;
+
+        std::vector<double> out ((size_t) n);
+        for (int i = 0; i < n; ++i)
+        {
+            const int lo = jmax (0, i - radius), hi = jmin (n - 1, i + radius), m = hi - lo + 1;
+            double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            for (int j = lo; j <= hi; ++j)
+            {
+                sx += j; sy += t[(size_t) j]; sxx += (double) j * j; sxy += j * t[(size_t) j];
+            }
+            const double slope = (m * sxy - sx * sy) / (m * sxx - sx * sx);
+            out[(size_t) i] = (sy - slope * sx) / m + slope * i;
+        }
+        return out;
+    }
+
+    struct Click { double time; bool accent; };
+
+    // Every click over [0, duration]: the smoothed grid, extrapolated before/after with the median
+    // gap; constant tempo from firstBeatOffset when there's no grid.
+    inline std::vector<Click> clicks (const SongMeta& meta, double duration)
+    {
+        std::vector<Click> out;
+        if (! (meta.bpm > 0) || ! std::isfinite (duration))
+            return out;
+
+        if (! meta.beatTimes.empty())
+        {
+            auto grid = smoothBeatGrid (meta.beatTimes);
+            const double gap = medianBeatGap (grid, 60.0 / meta.bpm);
+            const double first = grid.front();
+            const int lastIdx = (int) grid.size() - 1;
+
+            for (int i = -(int) std::floor (first / gap);; ++i)
+            {
+                const double time = i < 0 ? first + i * gap
+                                  : i > lastIdx ? grid.back() + (i - lastIdx) * gap
+                                  : grid[(size_t) i];
+                if (time > duration)
+                    break;
+                out.push_back ({ time, isGridAccent (i, meta.downbeatShift) });
+            }
+        }
+        else
+        {
+            for (int b = 1;; ++b)
+            {
+                const double time = meta.firstBeatOffset + b * 60.0 / meta.bpm;
+                if (time > duration)
+                    break;
+                out.push_back ({ time, isConstantAccent (b, meta.downbeatShift) });
+            }
+        }
+        return out;
+    }
+
+    // Woodblock click: a falling tone plus a short noise burst, beatPos = seconds since the click.
+    inline float clickSampleValue (double beatPos, bool accent, Random& rng)
+    {
+        constexpr double decay = 0.03, noiseDur = 0.005;
+        double sample = 0;
+        if (beatPos >= 0 && beatPos < decay)
+        {
+            const double start = accent ? 900 : 650, end = accent ? 500 : 400;
+            const double freq = start + (end - start) * (beatPos / decay);
+            sample = std::sin (MathConstants<double>::twoPi * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.7 : 0.55);
+        }
+        if (beatPos >= 0 && beatPos < noiseDur)
+            sample += (rng.nextDouble() * 2 - 1) * (1 - beatPos / noiseDur) * (accent ? 0.3 : 0.2);
+        return (float) sample;
+    }
+
+    // Mono 16-bit WAV of the clicks, `duration` seconds long.
+    inline bool renderWav (const std::vector<Click>& cs, double duration, const File& out, double sampleRate = 44100)
+    {
+        AudioBuffer<float> buf (1, jmax (1, (int) std::ceil (duration * sampleRate)));
+        buf.clear();
+        Random rng (1); // fixed seed: same file every time
+
+        const int clickLen = (int) std::ceil (0.03 * sampleRate);
+        for (auto& c : cs)
+        {
+            const int start = (int) std::round (c.time * sampleRate);
+            for (int i = 0; i < clickLen && start + i < buf.getNumSamples(); ++i)
+                if (start + i >= 0)
+                    buf.addSample (0, start + i, clickSampleValue (i / sampleRate, c.accent, rng));
+        }
+
+        out.deleteFile();
+        WavAudioFormat wav;
+        std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (new FileOutputStream (out), sampleRate, 1, 16, {}, 0));
+        return w != nullptr && w->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+    }
+}

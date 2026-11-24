@@ -11,6 +11,7 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 ## Qué hace
 
 - **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documents/Velody/<canción>.tracktionedit`.
+- **Metrónomo**: al abrir una canción ya analizada (con BPM en su `.velody`) se agrega una pista *Metrónomo* después de los stems, con los mismos clicks y acentos que el metrónomo de Electron (rejilla de beats, "el 1" manual o detectado). Se regenera cada vez que abres la canción; mute/volumen como cualquier pista.
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
@@ -64,6 +65,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/Library.h` — escaneo de la biblioteca de canciones (mismas reglas que `scanSongsLibrary` de Electron).
 - `Source/SongEdit.h` — arma las pistas de stems de una canción.
 - `Source/MixerPanel.h` — volumen y pan por pista.
+- `Source/Metronome.h` — lectura del `.velody` y clicks del metrónomo (port de `downbeat.ts`).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
 

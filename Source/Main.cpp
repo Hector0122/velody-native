@@ -35,7 +35,7 @@ public:
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
 
-        openEdit (projectFile(), {});
+        openEdit (projectFile(), nullptr);
         setSize (1000, 600);
     }
 
@@ -81,7 +81,7 @@ private:
     void save() { te::EditFileOperations (*edit).save (true, true, false); }
 
     // A new song edit gets one track per stem; reopening keeps the user's edit (mutes, plugins, takes).
-    void openEdit (const File& f, const Array<File>& stems)
+    void openEdit (const File& f, const Library::Song* song)
     {
         if (edit != nullptr)
         {
@@ -100,8 +100,14 @@ private:
         else
         {
             edit = te::createEmptyEdit (engine, f);
-            SongEdit::addStemTracks (*edit, stems);
+            if (song != nullptr)
+                SongEdit::addStemTracks (*edit, song->stems);
         }
+
+        // Re-rendered on every open so a downbeat fixed in the Electron app shows up here too.
+        auto clickWav = f.getSiblingFile (f.getFileNameWithoutExtension() + " - metronomo.wav");
+        if (song != nullptr && SongEdit::writeClickWav (engine, *song, clickWav))
+            SongEdit::setClickTrack (*edit, clickWav);
 
         edit->playInStopEnabled = true;
         edit->getTransport().addChangeListener (this);
@@ -133,9 +139,9 @@ private:
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton), [this] (int id)
         {
             if (id == -1)
-                openEdit (projectFile(), {});
+                openEdit (projectFile(), nullptr);
             else if (id > 0)
-                openEdit (projectFile (songs[id - 1].name), songs[id - 1].stems);
+                openEdit (projectFile (songs[id - 1].name), &songs.getReference (id - 1));
         });
     }
 

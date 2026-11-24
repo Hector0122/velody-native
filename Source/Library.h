@@ -24,6 +24,7 @@ namespace Library
     struct Song
     {
         String name;
+        File dir;
         Array<File> stems; // in stemNames order
     };
 
@@ -37,7 +38,7 @@ namespace Library
             if (dir.getFileName().startsWith ("."))
                 continue;
 
-            Song song { dir.getFileName(), {} };
+            Song song { dir.getFileName(), dir, {} };
             for (auto& stem : stemNames)
                 for (auto& f : dir.findChildFiles (File::findFiles, false, stem + "*"))
                     song.stems.add (f);
