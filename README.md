@@ -12,6 +12,7 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 - **Recorte** (botón junto a ⏮ Inicio, como los *trim points* de Electron): *Empezar aquí* / *Terminar aquí* en el cursor y *Quitar recorte*, para saltarte una intro u outro larga. La canción abre en el inicio del recorte, ⏮ Inicio regresa ahí, la reproducción se detiene sola al cruzar el fin (no mientras grabas, y puedes seguir escuchando lo que está después si das Play ahí) y **Exportar** saca solo ese tramo. Se guarda en el `.velody` (`trimStart`/`trimEnd`, igual que Electron) y viaja con la nube; los archivos de audio no se tocan. El botón dice *Recorte ✓* cuando la canción tiene uno. (A diferencia de Electron, la línea de tiempo no sombrea lo recortado.)
 - **Acordes**: a la derecha de la segunda fila, grande, el acorde que suena → el siguiente (del análisis del `.velody`; siguen la velocidad).
 - **Count-in** (selector arriba): 1 o 2 compases de clicks sobre la rejilla de la canción antes de que entre, desde donde esté el cursor. Se guarda en el `.velody` de la canción (`playbackCountInBars`, igual que Electron), así que viaja con la nube.
+- **Count-in al grabar** (selector junto al sonido del metrónomo; sin count-in, 1, 2 o 4 compases, como Electron, 1 por defecto, recordado para todas las canciones): al dar **Grabar** suenan los clicks sobre la rejilla de la canción con la canción en silencio, y la toma empieza exactamente en el cursor (punch-in), así queda alineada y sin el count-in. Sin tempo detectado graba directo.
 - **Sonido del metrónomo** (selector junto al count-in): Woodblock, Beep, Clave o Cencerro. Se guarda para todas las canciones (`~/.config/Velody/Velody.settings`) y también lo usa el count-in.
 - La línea de tiempo muestra la canción completa (se reajusta al cambiar la velocidad).
 - **Velocidad** (50–150 %) y **Tono** (±12 semitonos): en tiempo real con Signalsmith Stretch (la misma librería que Electron); la velocidad no cambia el tono. El metrónomo y el count-in siguen la velocidad; el tono no afecta el click. Se guardan en el `.velody` de la canción (`practiceSpeed`/`transposeSemitones`, igual que Electron) y viajan con la nube; los valores que antes quedaban solo en el proyecto local se pasan al `.velody` la primera vez que abres la canción. Grabar se desactiva mientras no estén en 100 % / 0 st (igual que en Electron).
@@ -91,6 +92,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/CloudSync.h` — sincronización: lista combinada, subir, descargar, metadatos, quitar/borrar (port de `cloud/sync.ts`).
 - `Source/CloudUi.h` — menú *Canciones* con estados de la nube, hilo de transferencias y ventana *Nube…* (también la usa *Vibes…*).
 - `Source/Setup.h` — instalación inicial (Python, venv, paquetes, ffmpeg) y su ventana (port de `main/setup`).
+- `Source/RecordCountIn.h` — count-in antes de grabar (plan de clicks y punch-in).
 - `Source/Trim.h` — recorte de inicio/fin por canción (en el `.velody`).
 - `Source/LibraryAnalysis.h` — análisis en segundo plano de las canciones sin análisis.
 - `Source/PracticeMeta.h` — velocidad/tono/count-in en el `.velody`.
@@ -125,7 +127,8 @@ Otros faltantes, por prioridad:
 - **Imprescindible**: decidir dónde quedan `cloud-worker/` y `MOBILE_APP.md` cuando se archive el repo de Electron.
 - ~~Volumen master y *Mix Pan*~~, ~~calidad de stems~~ — hecho.
 - ~~Puntos de recorte~~ — hecho.
-- **Recomendable**: count-in al grabar, buscador de canciones.
+- ~~Count-in al grabar~~ — hecho (falta probarlo con la interfaz de audio).
+- **Recomendable**: buscador de canciones.
 - **Opcional**: marcadores + loop A-B, aviso de actualización, botón *Tabs*, grabar en MP3, AppImage.
 - **No se porta** (decisión): setlists / Live mode, corregir "el 1" o el BPM a mano, importar enlaces en lote, guardar las tomas en la biblioteca.
 

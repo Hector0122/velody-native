@@ -12,6 +12,7 @@
 #include "SongDelete.h"
 #include "PracticeMeta.h"
 #include "Trim.h"
+#include "RecordCountIn.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -35,7 +36,7 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &trimButton, &chordDisplay, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &trimButton, &chordDisplay, &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
         speedLabel.setText ("Velocidad", dontSendNotification);
@@ -58,6 +59,12 @@ public:
         }
 
         countInBox.addItemList (StringArray (String ("Sin count-in"), String (u8"Count-in 1 compás"), String ("Count-in 2 compases")), 1);
+        // Recording's own count-in, for every song (Electron: separate from the one on Play).
+        recordCountInBox.addItemList (RecordCountIn::names, 1);
+        recordCountInBox.setTooltip (String (u8"Clicks antes de grabar, sobre el tempo de la canción; la toma empieza donde está el cursor"));
+        recordCountInBox.setSelectedItemIndex (RecordCountIn::barsOptions.indexOf (RecordCountIn::clampBars (settings.getIntValue ("recordCountInBars", RecordCountIn::defaultBars))),
+                                               dontSendNotification);
+        recordCountInBox.onChange = [this] { settings.setValue ("recordCountInBars", RecordCountIn::barsOptions[recordCountInBox.getSelectedItemIndex()]); };
 
         soundBox.addItemList (Metronome::soundNames, 1);
         soundBox.setTooltip (String (u8"Sonido del metrónomo y del count-in"));
@@ -159,6 +166,7 @@ public:
         trimButton.setBounds (row.removeFromLeft (80).reduced (2));
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
         soundBox.setBounds (row.removeFromLeft (120).reduced (2));
+        recordCountInBox.setBounds (row.removeFromLeft (200).reduced (2));
         speedLabel.setBounds (row.removeFromLeft (70));
         speedSlider.setBounds (row.removeFromLeft (260));
         pitchLabel.setBounds (row.removeFromLeft (40));
@@ -836,7 +844,7 @@ private:
         const bool wasRecording = t.isRecording();
 
         if (record)
-            EngineHelpers::toggleRecord (*edit);
+            wasRecording ? EngineHelpers::toggleRecord (*edit) : recordWithCountIn();
         else if (t.isPlaying())
             stopPlayback();
         else
@@ -846,11 +854,55 @@ private:
             save(); // keep the new take on disk right away
     }
 
+    ComboBox recordCountInBox;
+    bool punchForCountIn = false, sawRecording = false;
+    te::TimeRange loopBeforeRecord;
+
+    // Clicks on the song's grid with the song silent, then the take starts at the cursor (punch-in).
+    void recordWithCountIn()
+    {
+        endCountInRecording(); // a previous one that never started (no armed input)
+        auto& t = edit->getTransport();
+        const auto plan = RecordCountIn::plan (songMeta, t.getPosition().inSeconds(), speed(),
+                                               RecordCountIn::barsOptions[jmax (0, recordCountInBox.getSelectedItemIndex())]);
+        if (! plan.hasCountIn() || countIn == nullptr)
+            return EngineHelpers::toggleRecord (*edit);
+
+        countInFrom = plan.punchIn;
+        countIn->arm (plan.clicks, countInFrom, clickSound());
+        loopBeforeRecord = t.getLoopRange();
+        t.looping = false; // Tracktion records in loop mode or punch mode, not both
+        t.setLoopRange ({ te::TimePosition::fromSeconds (plan.punchIn), te::TimePosition::fromSeconds (plan.punchIn + 24 * 3600.0) });
+        edit->recordingPunchInOut = true;
+        punchForCountIn = true;
+        sawRecording = false;
+
+        // Same −4.5 s limit as the count-in on Play (see playWithCountIn).
+        const auto oldMode = edit->getCountInMode();
+        edit->setCountInMode (te::Edit::CountIn::twoBar);
+        t.setPosition (te::TimePosition::fromSeconds (plan.clicks.front().time));
+        edit->setCountInMode (oldMode);
+        t.record (false);
+    }
+
+    // After a count-in recording ends: punch mode off and the loop range back.
+    void endCountInRecording()
+    {
+        if (! punchForCountIn)
+            return;
+        punchForCountIn = false;
+        edit->recordingPunchInOut = false;
+        edit->getTransport().setLoopRange (loopBeforeRecord);
+        if (countIn != nullptr)
+            countIn->disarm();
+    }
+
     void stopPlayback()
     {
         auto& t = edit->getTransport();
         const bool inCountIn = countIn != nullptr && countIn->isArmed();
         t.stop (false, false);
+        endCountInRecording();
 
         if (inCountIn)
         {
@@ -1007,7 +1059,13 @@ private:
         if (source == &engine.getDeviceManager())
             assignInputsToTracks(); // interface or channel changed in the Audio dialog
         else
+        {
+            auto& t = edit->getTransport();
+            sawRecording |= t.isRecording();
+            if (punchForCountIn && sawRecording && ! t.isRecording())
+                endCountInRecording();
             refreshButtons();
+        }
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
