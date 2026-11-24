@@ -330,10 +330,16 @@ namespace PythonWorker
 
     inline StringArray updateYtDlpArgs() { return { pythonPath().getFullPathName(), "-m", "pip", "install", "-U", "yt-dlp" }; }
 
+    // MP3 quality of the stems (Electron's velody:stemBitrate); separate.py's default is 128.
+    inline const Array<int> stemBitrates { 128, 192, 320 };
+
     // separate.py exactly as JobManager.ts calls it; stems land in <outputDir>/<file name>/.
-    inline StringArray separateArgs (const File& audio, const File& outputDir)
+    inline StringArray separateArgs (const File& audio, const File& outputDir, int bitrate = 0)
     {
-        return { pythonPath().getFullPathName(), scriptsDir().getChildFile ("separate.py").getFullPathName(),
-                 audio.getFullPathName(), "--job-id", Uuid().toDashedString(), "--output-dir", outputDir.getFullPathName() };
+        StringArray a { pythonPath().getFullPathName(), scriptsDir().getChildFile ("separate.py").getFullPathName(),
+                        audio.getFullPathName(), "--job-id", Uuid().toDashedString(), "--output-dir", outputDir.getFullPathName() };
+        if (stemBitrates.contains (bitrate))
+            a.addArray (StringArray { "--bitrate", String (bitrate) });
+        return a;
     }
 }

@@ -155,4 +155,61 @@ namespace SongEdit
         }
         return i;
     }
+
+    // Mix Pan (Electron's "Mix Pan"): the whole mix to one side and the metronome, with its own pan in
+    // the mixer, to the other, e.g. mix to the PA and click to the in-ears. Done with one extra
+    // Volume & Pan (before the track's fader) on every track except the metronome, marked as Velody's.
+    inline const Identifier mixPanProp { "velodyMixPan" };
+
+    inline te::VolumeAndPanPlugin* mixPanPlugin (te::AudioTrack& t)
+    {
+        for (auto p : t.pluginList)
+            if (auto v = dynamic_cast<te::VolumeAndPanPlugin*> (p); v != nullptr && (bool) v->state[mixPanProp])
+                return v;
+        return nullptr;
+    }
+
+    // Also call it after tracks are added (new input tracks get it too).
+    inline void setMixPan (te::Edit& edit, float pan)
+    {
+        pan = jlimit (-1.0f, 1.0f, pan);
+        for (auto t : te::getAudioTracks (edit))
+        {
+            auto* ours = mixPanPlugin (*t);
+            if (t->getName() == clickTrackName || t->getName() == legacyClickTrackName)
+            {
+                if (ours != nullptr)
+                    ours->deleteFromParent();
+                continue;
+            }
+            if (ours == nullptr && pan == 0.0f)
+                continue;
+            if (ours == nullptr)
+            {
+                // Right before the track's own fader: Tracktion takes the *last* Volume & Pan as the
+                // track's (getVolumePlugin), which the mixer row must keep controlling.
+                int index = -1, i = 0;
+                for (auto p : t->pluginList)
+                {
+                    if (p == t->getVolumePlugin())
+                        index = i;
+                    ++i;
+                }
+                auto p = edit.getPluginCache().createNewPlugin (te::VolumeAndPanPlugin::xmlTypeName, {});
+                p->state.setProperty (mixPanProp, true, nullptr);
+                t->pluginList.insertPlugin (p, index, nullptr);
+                ours = mixPanPlugin (*t);
+            }
+            if (ours != nullptr)
+                ours->setPan (pan);
+        }
+    }
+
+    inline float mixPan (te::Edit& edit)
+    {
+        for (auto t : te::getAudioTracks (edit))
+            if (auto* p = mixPanPlugin (*t))
+                return p->getPan();
+        return 0.0f;
+    }
 }

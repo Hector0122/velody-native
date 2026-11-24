@@ -105,6 +105,12 @@ time.sleep(30)
         expect (File (args[1]).existsAsFile(), args[1]);
         expectEquals (args[2], String ("/music/Song.mp3"));
         expect (args.contains ("--output-dir") && args[args.indexOf ("--output-dir") + 1] == "/lib");
+        expect (! args.contains ("--bitrate")); // separate.py's default (128)
+
+        beginTest ("stem quality: 192/320 kbps go to separate.py; anything else is left to its default");
+        auto hq = separateArgs (File ("/music/Song.mp3"), File ("/lib"), 320);
+        expect (hq.contains ("--bitrate") && hq[hq.indexOf ("--bitrate") + 1] == "320");
+        expect (! separateArgs (File ("/music/Song.mp3"), File ("/lib"), 999).contains ("--bitrate"));
 
         beginTest ("scriptsDirFor: installed layout first, source checkout otherwise");
         auto prefix = dir.getChildFile ("usr");

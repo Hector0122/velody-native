@@ -226,6 +226,16 @@ struct ImportQueueTests : UnitTest
             expect (q.snapshot().empty());
         }
 
+        beginTest ("Importar menu: stem quality shows the current one and picking another fires it");
+        {
+            std::vector<Import::MenuAction> fired;
+            auto m = Import::menu ({}, [&] (const Import::MenuAction& a) { fired.push_back (a); }, 192);
+            expect (item (m, "Calidad de los stems: 192 kbps").has_value());
+            expect (item (m, "192 kbps")->isTicked && ! item (m, "128 kbps")->isTicked);
+            item (m, "320 kbps")->action();
+            expect (fired.size() == 1 && fired[0].kind == Import::MenuAction::setBitrate && fired[0].bitrate == 320);
+        }
+
         tmp.deleteRecursively();
     }
 };

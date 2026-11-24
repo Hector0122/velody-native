@@ -59,7 +59,8 @@ namespace Import
         return o;
     }
 
-    inline Steps pythonSteps (File root)
+    // `bitrate` is read when each song is separated, so a change applies to the next one.
+    inline Steps pythonSteps (File root, std::function<int()> bitrate = {})
     {
         Steps s;
         s.download = [] (const String& url, auto onProgress, auto onUpdating, Stop stop)
@@ -68,11 +69,11 @@ namespace Import
                 return notInstalled();
             return PythonWorker::download (PythonWorker::downloadArgs (url), PythonWorker::updateYtDlpArgs(), onProgress, onUpdating, stop);
         };
-        s.separate = [root] (const File& audio, auto onProgress, Stop stop)
+        s.separate = [root, bitrate] (const File& audio, auto onProgress, Stop stop)
         {
             if (! Setup::ready())
                 return notInstalled();
-            return PythonWorker::run (PythonWorker::separateArgs (audio, root), onProgress, stop);
+            return PythonWorker::run (PythonWorker::separateArgs (audio, root, bitrate ? bitrate() : 0), onProgress, stop);
         };
         // Like Electron after a separation: BPM/beat grid/downbeat/chords into .velody, so the new
         // song has a metronome and count-in. A failed detection isn't saved (it can be retried).
@@ -349,13 +350,14 @@ namespace Import
 
     struct MenuAction
     {
-        enum Kind { addFiles, addUrl, fetchVibes, vibesSettings, setup, cancel, showError, clearFinished } kind;
+        enum Kind { addFiles, addUrl, fetchVibes, vibesSettings, setup, setBitrate, cancel, showError, clearFinished } kind;
         Job job {};
+        int bitrate = 0;
     };
 
     // The "Importar" menu: add files / a link, then the queue (click a waiting or running job to
     // cancel it, a failed one to read the whole error).
-    inline PopupMenu menu (const std::vector<Job>& jobs, std::function<void (const MenuAction&)> act)
+    inline PopupMenu menu (const std::vector<Job>& jobs, std::function<void (const MenuAction&)> act, int bitrate = 128)
     {
         PopupMenu m;
         m.addItem (String (u8"Archivos…"), [act] { act ({ MenuAction::addFiles }); });
@@ -363,6 +365,15 @@ namespace Import
         m.addItem ("Traer lo que mandaste desde Vibes", [act] { act ({ MenuAction::fetchVibes }); });
         m.addItem (String (u8"Vibes…"), [act] { act ({ MenuAction::vibesSettings }); });
         m.addItem (String (u8"Instalación (Demucs)…"), [act] { act ({ MenuAction::setup }); });
+
+        // Like Electron's import screen: size per song vs quality.
+        PopupMenu quality;
+        const std::pair<int, String> options[] { { 128, String (u8"128 kbps (~23 MB por canción, suficiente para practicar)") },
+                                                 { 192, String (u8"192 kbps (~35 MB, equilibrado)") },
+                                                 { 320, String (u8"320 kbps (~58 MB, máxima calidad)") } };
+        for (auto& [kbps, text] : options)
+            quality.addItem (text, true, bitrate == kbps, [act, k = kbps] { MenuAction a { MenuAction::setBitrate }; a.bitrate = k; act (a); });
+        m.addSubMenu ("Calidad de los stems: " + String (bitrate) + " kbps", quality);
         if (jobs.empty())
             return m;
 

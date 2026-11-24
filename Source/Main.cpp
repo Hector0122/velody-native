@@ -14,6 +14,7 @@
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
+#include "LibraryAnalysis.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -75,6 +76,15 @@ public:
         vibesTimer.fn = [this] { checkVibes (false); };
         vibesTimer.startTimer (5 * 60 * 1000);
         Timer::callAfterDelay (3000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->checkVibes (false); });
+        analysis->onAnalysed = [this] (const String& name) { songAnalysed (name); };
+        analysis->onFailed = [this] (const String& name)
+        {
+            if (! currentSong.has_value() || currentSong->name != name)
+                return;
+            analysingOpenSong = false;
+            status.setText (String (u8"No se pudo analizar el tempo de esta canción (sin metrónomo); se reintenta la próxima vez que abras Velody"), dontSendNotification);
+        };
+        Timer::callAfterDelay (5000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->analysis->request(); });
         // First run (or a broken install): the setup window opens by itself, like Electron's SetupScreen.
         if (! Setup::ready())
             Timer::callAfterDelay (500, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->showSetup(); });
@@ -86,7 +96,14 @@ public:
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
         recordButton.onClick = [this] { stopOrPlay (true); };
-        newTrackButton.onClick = [this] { edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1); mixer.rebuild(); resized(); };
+        newTrackButton.onClick = [this]
+        {
+            edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1);
+            SongEdit::setMixPan (*edit, mixPanPreference());
+            mixer.rebuild();
+            resized();
+        };
+        mixer.onMixPanChanged = [this] (float pan) { settings.setValue ("mixPan", pan); };
         deleteButton.onClick = [this] { deleteSelection(); };
         folderButton.onClick = [] { projectFile().revealToUser(); };
 
@@ -104,6 +121,7 @@ public:
     ~MainComponent() override
     {
         exporter = nullptr;
+        analysis = nullptr; // before the queue: it asks the queue whether it's busy
         imports = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         save();
@@ -168,6 +186,9 @@ private:
         return o;
     }() };
 
+    // Mix Pan, for every song (Electron: velody:masterPan).
+    float mixPanPreference() { return jlimit (-1.0f, 1.0f, (float) settings.getDoubleValue ("mixPan", 0.0)); }
+
     Metronome::Sound clickSound() const { return (Metronome::Sound) jlimit (0, Metronome::soundNames.size() - 1, soundBox.getSelectedItemIndex()); }
 
     // Re-rendered on every open (and sound change) so a downbeat fixed in the Electron app shows up here too.
@@ -197,7 +218,14 @@ private:
 
     // Import queue (Electron's JobManager): one song at a time on a background thread.
     // shortcut: no bitrate choice (separate.py's default), unlike Electron's import screen.
-    std::unique_ptr<Import::Queue> imports = std::make_unique<Import::Queue> (Import::pythonSteps (Library::defaultRoot()));
+    std::unique_ptr<Import::Queue> imports = std::make_unique<Import::Queue> (Import::pythonSteps (Library::defaultRoot(), [this] { return stemBitrate(); }));
+
+    // MP3 quality of the stems, for every import (Electron: velody:stemBitrate). Read on the import thread.
+    int stemBitrate() const
+    {
+        const int b = settings.getIntValue ("stemBitrate", 128);
+        return PythonWorker::stemBitrates.contains (b) ? b : 128;
+    }
     std::unique_ptr<FileChooser> chooser;
 
     void showImportMenu()
@@ -212,16 +240,42 @@ private:
                 case A::fetchVibes:    return checkVibes (true);
                 case A::vibesSettings: return showVibesSettings();
                 case A::setup:         return showSetup();
+                case A::setBitrate:    settings.setValue ("stemBitrate", a.bitrate); return;
                 case A::cancel:        imports->cancel (a.job.id); return;
                 case A::clearFinished: imports->clearFinished(); return;
                 case A::showError:
                     AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo importar " + a.job.name, a.job.error);
                     return;
             }
-        }).showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
+        }, stemBitrate()).showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
     }
 
     Vibes::Poller vibes { *imports, Vibes::settingsFile(), File::getSpecialLocation (File::tempDirectory) };
+
+    // Songs without a current analysis get one in the background (metronome, count-in, chords).
+    std::unique_ptr<LibraryAnalysis::Analyzer> analysis = std::make_unique<LibraryAnalysis::Analyzer> (
+        Library::defaultRoot(), LibraryAnalysis::pythonDetect(),
+        [] { return Setup::ready(); },
+        [q = imports.get()] { return q->pending() > 0; },
+        [] { return Setup::hasPackage (Setup::defaultPaths().venv(), Setup::optionalPackage); });
+
+    // The open song just got its analysis: metronome, count-in and chords without reopening it.
+    bool analysingOpenSong = false; // the status bar says so until it's done
+
+    void songAnalysed (const String& name)
+    {
+        if (! currentSong.has_value() || currentSong->name != name)
+            return;
+        analysingOpenSong = false;
+        if (edit->getTransport().isPlaying() || edit->getTransport().isRecording())
+            return status.setText (String (u8"Análisis listo: el metrónomo aparece al detener y volver a abrir la canción"), dontSendNotification);
+
+        songMeta = Metronome::readMeta (currentSong->dir);
+        countInBox.setEnabled (songMeta.bpm > 0);
+        chordDisplay.setChords (songMeta.chords);
+        refreshClickTrack();
+        status.setText (String (u8"Análisis listo: metrónomo, count-in y acordes"), dontSendNotification);
+    }
     struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer;
 
     // `manual` ("Traer de Vibes"): says what happened; the automatic checks stay quiet when offline.
@@ -252,7 +306,8 @@ private:
         o.escapeKeyTriggersCloseButton = true;
         o.useNativeTitleBar = true;
         o.resizable = true;
-        o.content.setOwned (new Setup::Panel (Setup::defaultPaths(), Setup::systemEnv()));
+        o.content.setOwned (new Setup::Panel (Setup::defaultPaths(), Setup::systemEnv(),
+                                              [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr && Setup::ready()) sp->analysis->request(); }));
         o.launchAsync();
     }
 
@@ -480,6 +535,9 @@ private:
                 goToMusicStart();
         }
         startButton.setEnabled (song != nullptr);
+        analysingOpenSong = song != nullptr && Setup::ready() && analysis->needs (song->dir);
+        if (analysingOpenSong)
+            analysis->prioritize (song->name);
         chordDisplay.setChords (songMeta.chords);
 
         edit->playInStopEnabled = true;
@@ -493,6 +551,7 @@ private:
         editComponent->getEditViewState().showWaveDevices = true;
         addAndMakeVisible (*editComponent);
         fitViewToSong();
+        SongEdit::setMixPan (*edit, mixPanPreference());
         mixer.setEdit (edit.get());
         resized();
         refreshButtons();
@@ -837,6 +896,8 @@ private:
                     instance->setRecordingEnabled (t->itemID, true);
                 }
 
+        SongEdit::setMixPan (*edit, mixPanPreference()); // input tracks created just now get it too
+        mixer.rebuild();
         edit->restartPlayback();
         refreshButtons();
     }
@@ -875,7 +936,9 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        if (imports->pending() == 0 && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
+        if (analysingOpenSong && imports->pending() == 0 && exporter == nullptr && ! cloud.busy())
+            status.setText (String (u8"Analizando tempo y acordes de esta canción…"), dontSendNotification);
+        else if (imports->pending() == 0 && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
                                            : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "
