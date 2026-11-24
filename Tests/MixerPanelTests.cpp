@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "../Source/MixerPanel.h"
+#include "../Source/SongEdit.h"
 
 // UI -> data: moving a mixer slider changes the track's volume/pan and survives save + reopen.
 struct MixerPanelTests : UnitTest
@@ -12,7 +13,7 @@ struct MixerPanelTests : UnitTest
         auto file = File::createTempFile (".tracktionedit");
 
         {
-            auto edit = te::createEmptyEdit (engine, file);
+            auto edit = SongEdit::openOrCreate (engine, file);
             edit->ensureNumberOfAudioTracks (2);
 
             MixerPanel mixer;
@@ -39,7 +40,7 @@ struct MixerPanelTests : UnitTest
         }
 
         beginTest ("values survive save and reopen, and the mixer shows them");
-        auto edit = te::loadEditFromFile (engine, file);
+        auto edit = SongEdit::openOrCreate (engine, file);
         auto vp = te::getAudioTracks (*edit)[1]->getVolumePlugin();
         expectWithinAbsoluteError (vp->getVolumeDb(), -12.0f, 0.05f);
         expectWithinAbsoluteError (vp->getPan(), -0.5f, 0.01f);

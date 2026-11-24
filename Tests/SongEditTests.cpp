@@ -27,7 +27,7 @@ struct SongEditTests : UnitTest
         expect (engine.getAudioFileFormatManager().getFormatFromFileName (File ("/x/vocals.mp3")) != nullptr);
 
         beginTest ("a song edit gets one named track with one clip per stem");
-        auto edit = te::createEmptyEdit (engine, dir.getChildFile ("song.tracktionedit"));
+        auto edit = SongEdit::openOrCreate (engine, dir.getChildFile ("song.tracktionedit"));
         SongEdit::addStemTracks (*edit, { dir.getChildFile ("drums.wav"), dir.getChildFile ("vocals.wav") });
 
         auto tracks = te::getAudioTracks (*edit);
@@ -71,7 +71,7 @@ struct ClickTrackTests : UnitTest
         expect (SongEdit::writeClickWav (engine, song, wav));
         expectWithinAbsoluteError (te::AudioFile (engine, wav).getLength(), 4.0, 0.01);
 
-        auto edit = te::createEmptyEdit (engine, dir.getChildFile ("song.tracktionedit"));
+        auto edit = SongEdit::openOrCreate (engine, dir.getChildFile ("song.tracktionedit"));
         SongEdit::addStemTracks (*edit, song.stems);
         edit->ensureNumberOfAudioTracks (3); // an input track the user already had
         SongEdit::setClickTrack (*edit, wav);
@@ -108,7 +108,7 @@ struct CountInPluginTests : UnitTest
 
         beginTest ("one count-in plugin on the master bus, not duplicated, survives save + reopen");
         {
-            auto edit = te::createEmptyEdit (engine, file);
+            auto edit = SongEdit::openOrCreate (engine, file);
             auto p = CountInPlugin::findOrInsert (*edit);
             expect (p != nullptr);
             expect (CountInPlugin::findOrInsert (*edit) == p);
@@ -120,7 +120,7 @@ struct CountInPluginTests : UnitTest
             te::EditFileOperations (*edit).save (true, true, false);
         }
 
-        auto edit = te::loadEditFromFile (engine, file);
+        auto edit = SongEdit::openOrCreate (engine, file);
         int n = 0;
         for (auto p : edit->getMasterPluginList())
             if (dynamic_cast<CountInPlugin*> (p) != nullptr) ++n;
@@ -137,3 +137,43 @@ struct CountInPluginTests : UnitTest
 };
 
 static CountInPluginTests countInPluginTests;
+
+// Regression: a WAV beside the edit (metronome, recorded takes) must still be found after reopening.
+struct EditPathTests : UnitTest
+{
+    EditPathTests() : UnitTest ("SongEdit paths") {}
+
+    void runTest() override
+    {
+        te::Engine engine { "VelodyTests" };
+        auto dir = File::createTempFile ("velody-paths");
+        auto editFile = dir.getChildFile ("Song.tracktionedit");
+        auto beside = dir.getChildFile ("Song - metronomo.wav");
+        SongEditTests::writeWav (beside, 1.0);
+
+        beginTest ("a clip beside the edit resolves to the right file after save + reopen");
+        {
+            auto edit = SongEdit::openOrCreate (engine, editFile);
+            SongEdit::setClickTrack (*edit, beside);
+            te::EditFileOperations (*edit).save (true, true, false);
+        }
+        auto edit = SongEdit::openOrCreate (engine, editFile);
+        auto click = te::getAudioTracks (*edit)[0];
+        expectEquals (click->getName(), SongEdit::clickTrackName);
+        auto clip = dynamic_cast<te::WaveAudioClip*> (click->getClips()[0]);
+        expect (clip != nullptr);
+        if (clip != nullptr)
+        {
+            expectEquals (clip->getOriginalFile().getFullPathName(), beside.getFullPathName());
+            expect (clip->getAudioFile().isValid());
+        }
+
+        beginTest ("old edits saved with \"../x.wav\" (before the fix) resolve too");
+        expectEquals (edit->filePathResolver ("../Song - metronomo.wav").getFullPathName(), beside.getFullPathName());
+
+        edit = nullptr;
+        dir.deleteRecursively();
+    }
+};
+
+static EditPathTests editPathTests;

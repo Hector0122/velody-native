@@ -26,6 +26,7 @@ target_include_directories(Velody PRIVATE libs/tracktion_engine/examples)
 
 target_compile_definitions(Velody PRIVATE
     JUCE_USE_MP3AUDIOFORMAT=1
+    TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_LV2=1
     $<$<PLATFORM_ID:Darwin>:JUCE_PLUGINHOST_AU=1>
@@ -55,8 +56,8 @@ endif()
 enable_testing()
 juce_add_console_app(VelodyTests PRODUCT_NAME "VelodyTests")
 juce_generate_juce_header(VelodyTests)
-target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp)
-target_compile_definitions(VelodyTests PRIVATE JUCE_USE_MP3AUDIOFORMAT=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp)
+target_compile_definitions(VelodyTests PRIVATE JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(VelodyTests PRIVATE
     tracktion::tracktion_core tracktion::tracktion_engine tracktion::tracktion_graph
     juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils

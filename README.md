@@ -10,16 +10,17 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 
 ## Qué hace
 
-- **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documents/Velody/<canción>.tracktionedit`.
+- **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documentos/Velody/<canción>.tracktionedit`.
 - **Metrónomo**: al abrir una canción ya analizada (con BPM en su `.velody`) se agrega una pista *Metrónomo* después de los stems, con los mismos clicks y acentos que el metrónomo de Electron (rejilla de beats, "el 1" manual o detectado). Se regenera cada vez que abres la canción; mute/volumen como cualquier pista.
 - **Count-in** (selector arriba): 1 o 2 compases de clicks sobre la rejilla de la canción antes de que entre, desde donde esté el cursor. Arranca con el valor de Electron (`playbackCountInBars`) y tu cambio se guarda en el proyecto de la canción.
+- **Velocidad** (50–150 %) y **Tono** (±12 semitonos): en tiempo real con Signalsmith Stretch (la misma librería que Electron); la velocidad no cambia el tono. El metrónomo y el count-in siguen la velocidad; el tono no afecta el click. Arrancan con `practiceSpeed`/`transposeSemitones` de Electron. Grabar se desactiva mientras no estén en 100 % / 0 st (igual que en Electron).
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
 - Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada, con el monitoreo apagado (se prende en **I → Input Monitoring**; con bocinas causa retroalimentación).
 - **+** en el pie de cada pista: agrega un plugin; clic en el plugin abre su ventana.
 - **Grabar / Detener**, **Play / Stop**, **+ Pista**, **Borrar** (clip, plugin o pista seleccionada).
-- El proyecto y las tomas (WAV) se guardan en `~/Documents/Velody/` (botón **Carpeta**).
+- El proyecto y las tomas (WAV) se guardan en `~/Documentos/Velody/` (tu carpeta de Documentos) (botón **Carpeta**).
 - Arriba a la derecha: interfaz, Hz, buffer y latencia que reporta el driver.
 
 ## Compilar en Linux (Debian/Ubuntu)

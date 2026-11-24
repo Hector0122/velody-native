@@ -22,7 +22,22 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &status, &mixer });
+                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &status, &mixer });
+
+        speedLabel.setText ("Velocidad", dontSendNotification);
+        pitchLabel.setText ("Tono", dontSendNotification);
+        speedSlider.setRange (50, 150, 5);
+        speedSlider.setTextValueSuffix (" %");
+        speedSlider.setDoubleClickReturnValue (true, 100);
+        pitchSlider.setRange (-12, 12, 1);
+        pitchSlider.setTextValueSuffix (" st");
+        pitchSlider.setDoubleClickReturnValue (true, 0);
+        for (auto* sl : { &speedSlider, &pitchSlider })
+        {
+            sl->setTextBoxStyle (Slider::TextBoxRight, false, 60, 22);
+            sl->onValueChange = [this] { applyPractice(); };
+        }
 
         countInBox.addItemList ({ "Sin count-in", "Count-in 1 compás", "Count-in 2 compases" }, 1);
         countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
@@ -63,7 +78,12 @@ public:
         const int w = 110;
         for (auto* b : { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
-        countInBox.setBounds (top.removeFromLeft (170).reduced (2));
+        auto row = r.removeFromTop (30);
+        countInBox.setBounds (row.removeFromLeft (180).reduced (2));
+        speedLabel.setBounds (row.removeFromLeft (70));
+        speedSlider.setBounds (row.removeFromLeft (260));
+        pitchLabel.setBounds (row.removeFromLeft (40));
+        pitchSlider.setBounds (row.removeFromLeft (260));
         status.setBounds (top.reduced (4, 0));
         mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
         if (editComponent != nullptr)
@@ -81,9 +101,13 @@ private:
                folderButton { "Carpeta" };
     Label status;
     ComboBox countInBox;
+    Label speedLabel, pitchLabel;
+    Slider speedSlider, pitchSlider;
+    double appliedSpeed = 1;
     MixerPanel mixer;
 
-    static inline const Identifier countInProp { "velodyCountInBars" }; // saved in the song's edit
+    static inline const Identifier countInProp { "velodyCountInBars" }, // saved in the song's edit
+                                   speedProp { "velodySpeed" }, pitchProp { "velodySemitones" };
     Metronome::SongMeta songMeta; // bpm 0 when the open edit isn't an analyzed song
     CountInPlugin* countIn = nullptr;
 
@@ -105,16 +129,10 @@ private:
             edit = nullptr;
         }
 
-        if (f.existsAsFile())
-        {
-            edit = te::loadEditFromFile (engine, f);
-        }
-        else
-        {
-            edit = te::createEmptyEdit (engine, f);
-            if (song != nullptr)
-                SongEdit::addStemTracks (*edit, song->stems);
-        }
+        const bool isNew = ! f.existsAsFile();
+        edit = SongEdit::openOrCreate (engine, f);
+        if (isNew && song != nullptr)
+            SongEdit::addStemTracks (*edit, song->stems);
 
         // Re-rendered on every open so a downbeat fixed in the Electron app shows up here too.
         auto clickWav = f.getSiblingFile (f.getFileNameWithoutExtension() + " - metronomo.wav");
@@ -125,6 +143,14 @@ private:
         countIn = CountInPlugin::findOrInsert (*edit);
         countInBox.setSelectedId ((int) edit->state.getProperty (countInProp, songMeta.countInBars) + 1, dontSendNotification);
         countInBox.setEnabled (songMeta.bpm > 0);
+
+        // Speed/pitch start from Electron's saved practice values; changes here stay in this edit.
+        appliedSpeed = 1;
+        speedSlider.setValue (100 * Metronome::clampSpeed (edit->state.getProperty (speedProp, songMeta.practiceSpeed)), dontSendNotification);
+        pitchSlider.setValue (Metronome::clampSemitones (edit->state.getProperty (pitchProp, songMeta.transposeSemitones)), dontSendNotification);
+        speedSlider.setEnabled (song != nullptr);
+        pitchSlider.setEnabled (song != nullptr);
+        applyPractice();
 
         edit->playInStopEnabled = true;
         edit->getTransport().addChangeListener (this);
@@ -196,7 +222,10 @@ private:
     {
         auto& t = edit->getTransport();
         const int bars = countInBox.getSelectedId() - 1;
-        auto clicks = Metronome::planCountIn (songMeta, t.getPosition().inSeconds(), bars);
+        // The plan is in song time; the edit runs at song time / speed.
+        auto clicks = Metronome::planCountIn (songMeta, t.getPosition().inSeconds() * speed(), bars);
+        for (auto& c : clicks)
+            c.time /= speed();
 
         if (countIn != nullptr && ! clicks.empty())
         {
@@ -216,6 +245,26 @@ private:
     }
 
     double countInFrom = 0;
+
+    double speed() const { return Metronome::clampSpeed (speedSlider.getValue() / 100.0); }
+    int semitones() const { return Metronome::clampSemitones (pitchSlider.getValue()); }
+
+    void applyPractice()
+    {
+        if (edit == nullptr)
+            return;
+
+        edit->state.setProperty (speedProp, speed(), nullptr);
+        edit->state.setProperty (pitchProp, semitones(), nullptr);
+
+        // Keep the same spot in the song when the speed (and so the edit timeline) changes.
+        auto& t = edit->getTransport();
+        const double songPos = t.getPosition().inSeconds() * appliedSpeed;
+        SongEdit::setPractice (*edit, speed(), semitones());
+        t.setPosition (te::TimePosition::fromSeconds (songPos / speed()));
+        appliedSpeed = speed();
+        refreshButtons();
+    }
 
     // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed (not monitored),
     // placed after the song's stem tracks so a stem is never recorded over.
@@ -290,6 +339,8 @@ private:
                                                    / jmax (1.0, dev->getCurrentSampleRate()), 1) + " ms",
                         dontSendNotification);
 
+        // Like Electron: no recording over a stretched/transposed song (the take wouldn't line up).
+        recordButton.setEnabled (t.isRecording() || (speed() == 1.0 && semitones() == 0));
         deleteButton.setEnabled (selectionManager.getSelectedObject (0) != nullptr);
     }
 

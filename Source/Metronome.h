@@ -16,7 +16,18 @@ namespace Metronome
         std::vector<double> beatTimes;
         int downbeatShift = 0; // manual "this is the 1" wins over the detected one
         int countInBars = 0;   // playbackCountInBars
+        double practiceSpeed = 1;  // 0.5–1.5 in 0.05 steps
+        int transposeSemitones = 0; // −12…+12
     };
+
+    // Same clamps as Electron's pitchShifter.ts.
+    inline double clampSpeed (double s)
+    {
+        if (! std::isfinite (s)) return 1;
+        return jlimit (0.5, 1.5, std::round (s / 0.05) * 0.05);
+    }
+
+    inline int clampSemitones (double s) { return std::isfinite (s) ? jlimit (-12, 12, roundToInt (s)) : 0; }
 
     inline SongMeta readMeta (const File& songDir)
     {
@@ -32,6 +43,8 @@ namespace Metronome
                 m.beatTimes.push_back (b);
 
         m.countInBars = jlimit (0, 8, (int) json["playbackCountInBars"]);
+        if (json.hasProperty ("practiceSpeed"))      m.practiceSpeed = clampSpeed (json["practiceSpeed"]);
+        if (json.hasProperty ("transposeSemitones")) m.transposeSemitones = clampSemitones (json["transposeSemitones"]);
 
         auto shift = json["downbeatShift"].isVoid() || json["downbeatShift"].isUndefined()
                        ? json["detectedDownbeatShift"] : json["downbeatShift"];
