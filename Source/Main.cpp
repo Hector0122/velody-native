@@ -3,6 +3,7 @@
 #include "common/Components.h"
 #include "common/PluginWindow.h"
 #include "SongEdit.h"
+#include "MixerPanel.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -20,14 +21,14 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &status });
+                                             &newTrackButton, &deleteButton, &folderButton, &status, &mixer });
 
         songsButton.onClick = [this] { showSongsMenu(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
         recordButton.onClick = [this] { stopOrPlay (true); };
-        newTrackButton.onClick = [this] { edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1); };
+        newTrackButton.onClick = [this] { edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1); mixer.rebuild(); resized(); };
         deleteButton.onClick = [this] { deleteSelection(); };
         folderButton.onClick = [] { projectFile().revealToUser(); };
 
@@ -58,6 +59,7 @@ public:
         for (auto* b : { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
         status.setBounds (top.reduced (4, 0));
+        mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
         if (editComponent != nullptr)
             editComponent->setBounds (r);
     }
@@ -72,6 +74,7 @@ private:
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
+    MixerPanel mixer;
 
     Array<Library::Song> songs;
 
@@ -85,6 +88,7 @@ private:
             edit->getTransport().stop (false, false);
             save();
             selectionManager.deselectAll();
+            mixer.setEdit (nullptr);
             editComponent = nullptr;
             edit = nullptr;
         }
@@ -109,6 +113,7 @@ private:
         editComponent->getEditViewState().showFooters = true; // footer = plugin chain with "+" button
         editComponent->getEditViewState().showWaveDevices = true;
         addAndMakeVisible (*editComponent);
+        mixer.setEdit (edit.get());
         resized();
         refreshButtons();
     }
@@ -199,7 +204,7 @@ private:
         auto sel = selectionManager.getSelectedObject (0);
         if (auto clip = dynamic_cast<te::Clip*> (sel))         clip->removeFromParent();
         else if (auto plugin = dynamic_cast<te::Plugin*> (sel)) plugin->deleteFromParent();
-        else if (auto track = dynamic_cast<te::AudioTrack*> (sel)) edit->deleteTrack (track);
+        else if (auto track = dynamic_cast<te::AudioTrack*> (sel)) { edit->deleteTrack (track); mixer.rebuild(); resized(); }
     }
 
     void refreshButtons()
