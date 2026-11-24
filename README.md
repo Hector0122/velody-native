@@ -30,7 +30,7 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 ## Compilar en Linux (Debian/Ubuntu)
 
 ```bash
-sudo apt install build-essential cmake ninja-build git libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libxi-dev ladspa-sdk
+sudo apt install build-essential cmake ninja-build git libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxrandr-dev libxrender-dev libxi-dev ladspa-sdk libcurl4-openssl-dev
 ```
 
 ```bash
