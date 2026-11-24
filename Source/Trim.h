@@ -79,7 +79,7 @@ namespace Trim
     inline String describe (const Range& r)
     {
         if (! r.active())
-            return "Sin recorte: la canción completa";
+            return String (u8"Sin recorte: la canción completa");
         return "Recorte: " + clock (r.start) + String (u8" → ") + (r.end ? clock (*r.end) : String ("final"));
     }
 

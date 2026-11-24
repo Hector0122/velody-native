@@ -150,7 +150,7 @@ namespace Setup
     }
 
     enum class Step { python, venv, packages, ffmpeg };
-    inline const StringArray stepNames { "Python 3.9–3.11", "Entorno de Python (venv)", "Demucs, PyTorch, librosa, yt-dlp", "ffmpeg" };
+    inline const StringArray stepNames { String (u8"Python 3.9–3.11"), "Entorno de Python (venv)", "Demucs, PyTorch, librosa, yt-dlp", "ffmpeg" };
 
     struct Event
     {
@@ -175,7 +175,7 @@ namespace Setup
             for (auto step : { Step::python, Step::venv, Step::packages, Step::ffmpeg })
             {
                 if (stop())
-                    return "Instalación cancelada";
+                    return String (u8"Instalación cancelada");
                 emit (step, Event::State::working, -1, String (u8"Revisando…"));
                 auto error = runStep (step, stop);
                 if (error.isNotEmpty())
@@ -297,7 +297,7 @@ namespace Setup
                     tail.remove (0);
                 emit (Step::packages, Event::State::working, -1, line.trim().substring (0, 140));
             }, stop, 45 * 60 * 1000);
-            return r.code == 0 ? String() : String (r.timedOut ? "tardó demasiado" : r.stopped ? "cancelada" : "pip falló");
+            return r.code == 0 ? String() : (r.timedOut ? String (u8"tardó demasiado") : r.stopped ? String ("cancelada") : String (u8"pip falló"));
         }
 
         String installPackages (const std::function<bool()>& stop)
@@ -415,7 +415,7 @@ namespace Setup
         void setStep (int i, Event::State st, const String& msg)
         {
             const String mark = st == Event::State::done ? String (u8"✓ ") : st == Event::State::failed ? String (u8"✕ ") : String (u8"… ");
-            steps[i]->setText (mark + stepNames[i] + (msg.isNotEmpty() ? "  — " + msg : String()), dontSendNotification);
+            steps[i]->setText (mark + stepNames[i] + (msg.isNotEmpty() ? String (u8"  — ") + msg : String()), dontSendNotification);
             steps[i]->setColour (Label::textColourId, st == Event::State::done ? Colours::lightgreen : st == Event::State::failed ? Colours::salmon : Colours::white);
         }
 
@@ -450,7 +450,7 @@ namespace Setup
 
         struct Worker : Thread
         {
-            explicit Worker (Panel& p) : Thread ("Instalación"), panel (&p), installer (p.paths, p.env) {}
+            explicit Worker (Panel& p) : Thread (String (u8"Instalación")), panel (&p), installer (p.paths, p.env) {}
             ~Worker() override { stopThread (20000); }
 
             void run() override

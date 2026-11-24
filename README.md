@@ -6,6 +6,8 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 
 ## Qué hace
 
+- **Buscar canción** (Ctrl+F, o *Canciones → Buscar canción…*): filtra mientras escribes, sin importar acentos ni mayúsculas y con varias palabras en cualquier orden («caifanes afuera»); ↑/↓ y Enter para abrir (una canción que solo está en la nube se descarga).
+- **Actualizaciones**: instalado con el `.deb`, al abrir revisa la última versión en GitHub; si hay una nueva aparece **Actualizar a X.Y.Z** arriba a la derecha: la baja, la instala (pide tu contraseña en la ventana del sistema) y Velody se reinicia ya actualizado, guardando tu proyecto.
 - **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documentos/Velody/<canción>.tracktionedit`.
 - **Metrónomo**: al abrir una canción ya analizada (con BPM en su `.velody`) se agrega una pista *Metrónomo* después de los stems, con los mismos clicks y acentos que el metrónomo de Electron (rejilla de beats, "el 1" manual o detectado). Se regenera cada vez que abres la canción; mute/volumen como cualquier pista.
 - **Inicio de la música**: al abrir una canción el cursor se coloca donde empieza a sonar (se salta el silencio inicial, como en Electron); **⏮ Inicio** regresa ahí.
@@ -93,6 +95,8 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/CloudUi.h` — menú *Canciones* con estados de la nube, hilo de transferencias y ventana *Nube…* (también la usa *Vibes…*).
 - `Source/Setup.h` — instalación inicial (Python, venv, paquetes, ffmpeg) y su ventana (port de `main/setup`).
 - `Source/RecordCountIn.h` — count-in antes de grabar (plan de clicks y punch-in).
+- `Source/SongSearch.h` — búsqueda de canciones.
+- `Source/Updater.h` — aviso de versión nueva e instalación del `.deb`.
 - `Source/Trim.h` — recorte de inicio/fin por canción (en el `.velody`).
 - `Source/LibraryAnalysis.h` — análisis en segundo plano de las canciones sin análisis.
 - `Source/PracticeMeta.h` — velocidad/tono/count-in en el `.velody`.
@@ -128,8 +132,8 @@ Otros faltantes, por prioridad:
 - ~~Volumen master y *Mix Pan*~~, ~~calidad de stems~~ — hecho.
 - ~~Puntos de recorte~~ — hecho.
 - ~~Count-in al grabar~~ — hecho (falta probarlo con la interfaz de audio).
-- **Recomendable**: buscador de canciones.
-- **Opcional**: marcadores + loop A-B, aviso de actualización, botón *Tabs*, grabar en MP3, AppImage.
+- ~~Buscador de canciones~~, ~~aviso de actualización~~ — hecho.
+- **Opcional**: marcadores + loop A-B. (Descartado: botón *Tabs*; por ahora solo `.deb`, sin AppImage.)
 - **No se porta** (decisión): setlists / Live mode, corregir "el 1" o el BPM a mano, importar enlaces en lote, guardar las tomas en la biblioteca.
 
 ## Licencia

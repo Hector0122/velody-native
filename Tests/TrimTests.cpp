@@ -29,7 +29,7 @@ struct TrimTests : UnitTest
         beginTest ("nothing saved: the whole song");
         auto r = load (song);
         expect (! r.active() && r.start == 0 && ! r.end);
-        expectEquals (describe (r), String ("Sin recorte: la canción completa"));
+        expectEquals (describe (r), String (u8"Sin recorte: la canción completa"));
 
         beginTest ("start/end rules: the end must be after the start; a new start past the end drops it");
         r = withStart (r, 12.4);

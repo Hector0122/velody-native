@@ -198,14 +198,14 @@ namespace Cloud
         {
             auto r = send ("PUT", url, &data, {}, transferTimeoutMs);
             if (r.status < 200 || r.status >= 300)
-                throw Error ("La subida al almacenamiento falló (" + String (r.status) + ")", r.status);
+                throw Error (String (u8"La subida al almacenamiento falló (") + String (r.status) + ")", r.status);
         }
 
         MemoryBlock getFile (const String& url)
         {
             auto r = send ("GET", url, nullptr, {}, transferTimeoutMs);
             if (r.status < 200 || r.status >= 300)
-                throw Error ("La descarga del almacenamiento falló (" + String (r.status) + ")", r.status);
+                throw Error (String (u8"La descarga del almacenamiento falló (") + String (r.status) + ")", r.status);
             return r.body;
         }
 

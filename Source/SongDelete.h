@@ -42,7 +42,7 @@ namespace SongDelete
     {
         // Same guard as Electron's isInsideDir: only a folder strictly inside the library.
         if (! p.songDir.isDirectory() || ! p.songDir.isAChildOf (libraryRoot))
-            return Result::fail ("La canción no está en la biblioteca: " + p.songDir.getFullPathName());
+            return Result::fail (String (u8"La canción no está en la biblioteca: ") + p.songDir.getFullPathName());
 
         if (! trash (p.songDir))
             return Result::fail ("No se pudo mandar a la papelera " + p.songDir.getFullPathName());
@@ -57,6 +57,6 @@ namespace SongDelete
                 failed.add (f.getFileName());
 
         return failed.isEmpty() ? Result::ok()
-                                : Result::fail ("La canción se quitó, pero no se pudo mandar a la papelera: " + failed.joinIntoString (", "));
+                                : Result::fail (String (u8"La canción se quitó, pero no se pudo mandar a la papelera: ") + failed.joinIntoString (", "));
     }
 }

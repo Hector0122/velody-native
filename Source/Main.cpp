@@ -13,6 +13,8 @@
 #include "PracticeMeta.h"
 #include "Trim.h"
 #include "RecordCountIn.h"
+#include "SongSearch.h"
+#include "Updater.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -136,6 +138,12 @@ public:
         engine.getDeviceManager().addChangeListener (this);
 
         openEdit (projectFile(), nullptr);
+        setWantsKeyboardFocus (true); // Ctrl+F
+
+        addChildComponent (updateButton);
+        updateButton.setColour (TextButton::buttonColourId, Colours::darkgreen);
+        updateButton.onClick = [this] { confirmUpdate(); };
+        Timer::callAfterDelay (4000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->checkForUpdate(); });
         setSize (1000, 600);
     }
 
@@ -172,6 +180,8 @@ public:
         pitchLabel.setBounds (row.removeFromLeft (40));
         pitchSlider.setBounds (row.removeFromLeft (260));
         chordDisplay.setBounds (row.reduced (8, 1));
+        if (updateButton.isVisible())
+            updateButton.setBounds (top.removeFromRight (170).reduced (2));
         status.setBounds (top.reduced (4, 0));
         mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
         if (editComponent != nullptr)
@@ -648,6 +658,111 @@ private:
 
     CloudUi::Listing listing;
 
+    // Ctrl+F or Canciones → Buscar canción…: this laptop's songs at once, the cloud's when they arrive.
+    void showSearch()
+    {
+        auto* panel = new SongSearch::Panel ([this] (const Cloud::Entry& e)
+        {
+            if (auto* w = searchWindow.getComponent())
+                w->exitModalState (0);
+            songAction ({ e.state == Cloud::State::cloud ? CloudUi::Action::download : CloudUi::Action::open, e });
+        });
+        panel->setSongs (cloud.localListing().songs);
+        if (cloud.active() && ! cloud.busy())
+            cloud.list ([sp = SafePointer<SongSearch::Panel> (panel)] (const CloudUi::Listing& l)
+            {
+                if (sp != nullptr && ! l.offline)
+                    sp->setSongs (l.songs);
+            });
+
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = String (u8"Buscar canción");
+        o.dialogBackgroundColour = getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+        o.content.setOwned (panel);
+        o.componentToCentreAround = this;
+        searchWindow = o.launchAsync();
+    }
+
+    Component::SafePointer<DialogWindow> searchWindow;
+
+    // "Hay una versión nueva": a button on the top row when GitHub has a newer .deb.
+    TextButton updateButton;
+    std::optional<Updater::Update> update;
+    CloudUi::Runner updateRunner;
+    bool updating = false;
+
+    void checkForUpdate()
+    {
+        if (! Updater::canSelfUpdate (File::getSpecialLocation (File::currentExecutableFile)))
+            return; // a build from source
+        auto found = std::make_shared<std::optional<Updater::Update>>();
+        updateRunner.run ([found] (const Cloud::Progress&) { *found = Updater::check (ProjectInfo::versionString); },
+                          [this, found] (const String&)
+                          {
+                              update = *found;
+                              if (! update)
+                                  return;
+                              updateButton.setButtonText ("Actualizar a " + update->version);
+                              updateButton.setTooltip ("Hay una versión nueva de Velody: " + update->version);
+                              updateButton.setVisible (true);
+                              resized();
+                          });
+    }
+
+    void confirmUpdate()
+    {
+        if (! update || updating)
+            return;
+        AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::QuestionIcon)
+                                    .withTitle ("Actualizar a Velody " + update->version)
+                                    .withMessage (String (u8"Se descarga la versión nueva y se instala (el sistema te pide tu contraseña). "
+                                                          u8"Al terminar Velody se cierra guardando tu proyecto y se vuelve a abrir."))
+                                    .withButton ("Actualizar", 1)
+                                    .withButton (String (u8"Después"), 0),
+                                [this] (int r) { if (r == 1) installUpdate(); });
+    }
+
+    void installUpdate()
+    {
+        updating = true;
+        updateButton.setEnabled (false);
+        auto u = *update;
+        updateRunner.run ([u] (const Cloud::Progress& progress)
+                          {
+                              auto error = Updater::install (u, Setup::systemEnv(), File::getSpecialLocation (File::tempDirectory),
+                                                             [&] (Updater::Stage st, int pct) { progress (st == Updater::Stage::download ? pct : -1); },
+                                                             [] { return false; });
+                              if (error.isNotEmpty())
+                                  throw Cloud::Error (error, 0);
+                          },
+                          [this] (const String& error)
+                          {
+                              updating = false;
+                              updateButton.setEnabled (true);
+                              if (error.isNotEmpty())
+                                  return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo actualizar", error);
+                              // The new files are in /usr now: start them once this one has closed (and saved).
+                              std::system ("setsid sh -c 'sleep 2; exec /usr/bin/velody-native' >/dev/null 2>&1 &");
+                              JUCEApplication::getInstance()->systemRequestedQuit();
+                          },
+                          [this] (int pct)
+                          {
+                              status.setText (pct >= 0 ? String (u8"Descargando la actualización…  ") + String (pct) + " %"
+                                                       : String (u8"Instalando la actualización… (escribe tu contraseña en la ventana del sistema)"),
+                                              dontSendNotification);
+                          });
+    }
+
+    bool keyPressed (const KeyPress& k) override
+    {
+        if (k == KeyPress ('f', ModifierKeys::commandModifier, 0))
+            return showSearch(), true;
+        return false;
+    }
+
     void songAction (const CloudUi::Action& a)
     {
         using A = CloudUi::Action;
@@ -661,6 +776,7 @@ private:
             case A::removeCurrent:   return confirmRemoveCurrentSong (a.entry);
             case A::deleteFromCloud: return confirmDeleteCloudOnly (a.entry);
             case A::settings:        return showCloudSettings();
+            case A::search:          return showSearch();
         }
     }
 
@@ -805,7 +921,7 @@ private:
                                        .withMessage ((everywhere ? String (u8"Se borra de la nube para siempre. ") : String())
                                                      + String (u8"Se manda a la papelera: los stems y el análisis de la canción, y su proyecto aquí "
                                                              u8"(volúmenes, plugins, metrónomo). Puedes recuperarlos desde la papelera.")
-                                                     + (n > 0 ? "\n\nTienes " + String (n) + (n == 1 ? String (u8" grabación") : String (u8" grabaciones")) + " en esta canción." : String()));
+                                                     + (n > 0 ? "\n\nTienes " + String (n) + (n == 1 ? String (u8" grabación") : String (u8" grabaciones")) + String (u8" en esta canción.") : String()));
         if (n > 0)
             opts = opts.withButton ("Quitar y conservar grabaciones", 1).withButton ("Quitar con mis grabaciones", 2).withButton ("Cancelar", 0);
         else
@@ -835,7 +951,7 @@ private:
 
         auto r = SongDelete::execute (plan, includeTakes, Library::defaultRoot(), projectsDir());
         if (r.failed())
-            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo quitar la canción", r.getErrorMessage());
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, String (u8"No se pudo quitar la canción"), r.getErrorMessage());
     }
 
     void stopOrPlay (bool record)
