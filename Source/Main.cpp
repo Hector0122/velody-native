@@ -636,7 +636,7 @@ class VelodyApp : public JUCEApplication
 {
 public:
     const String getApplicationName() override    { return "Velody"; }
-    const String getApplicationVersion() override { return "0.1.0"; }
+    const String getApplicationVersion() override { return ProjectInfo::versionString; }
 
     void initialise (const String&) override { window = std::make_unique<MainWindow>(); }
     void shutdown() override                 { window = nullptr; }

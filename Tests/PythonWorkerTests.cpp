@@ -106,6 +106,13 @@ time.sleep(30)
         expectEquals (args[2], String ("/music/Song.mp3"));
         expect (args.contains ("--output-dir") && args[args.indexOf ("--output-dir") + 1] == "/lib");
 
+        beginTest ("scriptsDirFor: installed layout first, source checkout otherwise");
+        auto prefix = dir.getChildFile ("usr");
+        auto exe = prefix.getChildFile ("bin/velody-native");
+        expectEquals (scriptsDirFor (exe).getFullPathName(), File (VELODY_PYTHON_WORKER_DIR).getFullPathName());
+        prefix.getChildFile ("share/velody-native/python-worker/separate.py").create();
+        expectEquals (scriptsDirFor (exe).getFullPathName(), prefix.getChildFile ("share/velody-native/python-worker").getFullPathName());
+
         testDownload();
         dir.deleteRecursively();
     }

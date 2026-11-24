@@ -19,15 +19,21 @@ namespace PythonWorker
         return venv.existsAsFile() ? venv : File ("/usr/bin/python3");
     }
 
-    // shortcut: points at the source checkout (set by CMake); a packaged build needs to ship python-worker next to the binary.
-    inline File scriptsDir()
+    // Installed (.deb): <prefix>/bin/velody-native -> <prefix>/share/velody-native/python-worker.
+    // Built from source: the checkout's python-worker (path baked in by CMake).
+    inline File scriptsDirFor (const File& executable)
     {
+        auto installed = executable.getParentDirectory().getSiblingFile ("share/velody-native/python-worker");
+        if (installed.getChildFile ("separate.py").existsAsFile())
+            return installed;
        #ifdef VELODY_PYTHON_WORKER_DIR
         return File (VELODY_PYTHON_WORKER_DIR);
        #else
-        return File::getSpecialLocation (File::currentExecutableFile).getSiblingFile ("python-worker");
+        return installed;
        #endif
     }
+
+    inline File scriptsDir() { return scriptsDirFor (File::getSpecialLocation (File::currentExecutableFile)); }
 
     struct Message
     {

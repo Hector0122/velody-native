@@ -6,11 +6,12 @@ if (APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "")
 endif()
 
-add_subdirectory(libs/tracktion_engine/modules/juce)
-add_subdirectory(libs/tracktion_engine/modules)
+add_subdirectory(libs/tracktion_engine/modules/juce EXCLUDE_FROM_ALL) # EXCLUDE_FROM_ALL: keep JUCE/Tracktion headers and tools out of the package
+add_subdirectory(libs/tracktion_engine/modules EXCLUDE_FROM_ALL)
 
 juce_add_gui_app(Velody
     PRODUCT_NAME "Velody"
+    VERSION ${PROJECT_VERSION}
     BUNDLE_ID "com.velody.native"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Velody graba desde tu interfaz de audio"
@@ -67,3 +68,26 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(VelodyTests PRIVATE -latomic)
 endif()
 add_test(NAME VelodyTests COMMAND VelodyTests)
+
+# Linux package: cmake --build build --target Velody && cd build && cpack -G DEB
+# Named velody-native so it installs next to the Electron app's "velody" package.
+include(GNUInstallDirs)
+install(PROGRAMS $<TARGET_FILE:Velody> DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME velody-native)
+install(DIRECTORY python-worker/ DESTINATION ${CMAKE_INSTALL_DATADIR}/velody-native/python-worker
+        PATTERN "__pycache__" EXCLUDE PATTERN ".pytest_cache" EXCLUDE PATTERN "tests" EXCLUDE)
+install(FILES packaging/velody-native.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES packaging/velody-native.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps)
+
+set(CPACK_PACKAGE_NAME velody-native)
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_CONTACT "Hector Paramo")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Velody nativo: practica sobre stems separados, graba y usa plugins VST3/LV2")
+set(CPACK_PACKAGING_INSTALL_PREFIX /usr)
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SECTION sound)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON) # library dependencies worked out from the binary
+# JUCE dlopens X11 and JACK at runtime, so shlibdeps can't see them: listed by hand.
+# Separation/analysis use Python + ffmpeg; Demucs lives in the venv the Electron app's setup creates.
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "python3, ffmpeg, libx11-6, libxext6, libxrandr2, libxinerama1, libxcursor1, libxi6, libxrender1")
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "pipewire-jack | libjack-jackd2-0")
+include(CPack)

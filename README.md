@@ -82,6 +82,15 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
 
+## Publicar una versión
+
+Solo con tags (no hay CI en cada push):
+
+1. Sube la versión en `CMakeLists.txt` (`project(VelodyNative VERSION 0.2.0)`) y haz commit.
+2. `git tag v0.2.0 && git push origin main v0.2.0`
+
+`.github/workflows/release.yml` compila, corre las pruebas, arma el `.deb` (`velody-native`, convive con el `velody` de Electron) y lo publica en GitHub Releases. Para armarlo local: `cd build && cpack -G DEB`.
+
 ## Licencia
 
 Tracktion Engine y JUCE son GPLv3/AGPLv3 (o comercial). Si publicas este repo, debe ser GPLv3.

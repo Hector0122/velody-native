@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Velody (nativo)
+Comment=Practica sobre stems separados, graba y usa plugins
+Exec=velody-native
+Icon=velody-native
+Categories=AudioVideo;Audio;Music;
+Terminal=false
