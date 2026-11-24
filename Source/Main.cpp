@@ -11,6 +11,7 @@
 #include "SongInfo.h"
 #include "SongDelete.h"
 #include "CloudUi.h"
+#include "ImportQueue.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -23,6 +24,7 @@ static File projectFile (const String& name = "Proyecto")
 }
 
 class MainComponent : public Component,
+                      public FileDragAndDropTarget,
                       private ChangeListener
 {
 public:
@@ -59,7 +61,9 @@ public:
         countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
-        importButton.onClick = [this] { if (importing != nullptr) importing->signalThreadShouldExit(); else showImportMenu(); };
+        importButton.onClick = [this] { showImportMenu(); };
+        imports->onChanged = [this] { importsChanged(); };
+        imports->onImported = [this] (const String& name) { songImported (name); };
         exportButton.onClick = [this] { showExportMenu(); };
         startButton.setTooltip (String (u8"Ir a donde empieza la música"));
         startButton.onClick = [this] { goToMusicStart(); };
@@ -86,7 +90,7 @@ public:
     ~MainComponent() override
     {
         exporter = nullptr;
-        importing = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
+        imports = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         save();
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
@@ -178,99 +182,56 @@ private:
 
     Array<Library::Song> songs;
 
-    // Import runs on a background thread, one song at a time: (YouTube download →) separate.py →
-    // detect_bpm.py, like Electron's url:import + JobManager + analysis.
-    // shortcut: no queue and no bitrate choice (separate.py's default), unlike Electron's import screen.
-    struct ImportThread : Thread
-    {
-        ImportThread (MainComponent& o, File f, String link)
-            : Thread ("Importar"), owner (&o), audio (std::move (f)), url (std::move (link)) {}
-        ~ImportThread() override { stopThread (15000); }
-
-        void run() override
-        {
-            auto stop = [this] { return threadShouldExit(); };
-            File downloadDir;
-
-            if (url.isNotEmpty())
-            {
-                status (String (u8"Descargando…"));
-                auto dl = PythonWorker::download (PythonWorker::downloadArgs (url), PythonWorker::updateYtDlpArgs(),
-                                                  [this] (const String& title, int pct) { status ("Descargando " + title + String (u8"…  ") + String (pct) + " %"); },
-                                                  [this] { status (String (u8"YouTube bloqueó la descarga; actualizando yt-dlp…")); }, stop);
-                if (! dl.ok)
-                    return finish (dl, url);
-
-                audio = File (dl.path);
-                downloadDir = audio.getParentDirectory(); // download.py's velody_dl_* temp dir
-            }
-
-            const auto name = audio.getFileNameWithoutExtension();
-            status ("Separando " + name + String (u8"…"));
-            auto outcome = PythonWorker::run (PythonWorker::separateArgs (audio, Library::defaultRoot()),
-                                              [this, name] (int pct) { status ("Separando " + name + String (u8"…  ") + String (pct) + " %"); }, stop);
-            if (outcome.ok && ! threadShouldExit())
-                analyse (name);
-
-            if (downloadDir.getFileName().startsWith ("velody_dl_"))
-                downloadDir.deleteRecursively();
-
-            finish (outcome, name);
-        }
-
-        // Like Electron after a separation: BPM/beat grid/downbeat/chords into .velody, so the new
-        // song has a metronome and count-in. A failed detection isn't saved (it can be retried).
-        void analyse (const String& name)
-        {
-            status (String (u8"Analizando tempo y acordes…"));
-            for (auto& song : Library::scan (Library::defaultRoot()))
-                if (song.name == name)
-                    if (auto stem = SongMeta::pickBeatTrackingStem (song.stems); stem.existsAsFile())
-                        if (auto patch = SongMeta::analysisPatch (PythonWorker::lastLine (PythonWorker::detectBpmArgs (stem),
-                                                                                         [this] { return threadShouldExit(); })))
-                            SongMeta::update (song.dir, *patch);
-        }
-
-        void status (const String& text) { post ([text] (MainComponent& m) { m.status.setText (text, dontSendNotification); }); }
-        void finish (const PythonWorker::Outcome& o, const String& name) { post ([o, name] (MainComponent& m) { m.importFinished (o, name); }); }
-
-        void post (std::function<void (MainComponent&)> fn)
-        {
-            MessageManager::callAsync ([o = owner, fn] { if (o != nullptr) fn (*o); });
-        }
-
-        Component::SafePointer<MainComponent> owner;
-        File audio;
-        String url;
-    };
-
-    std::unique_ptr<ImportThread> importing;
+    // Import queue (Electron's JobManager): one song at a time on a background thread.
+    // shortcut: no bitrate choice (separate.py's default), unlike Electron's import screen.
+    std::unique_ptr<Import::Queue> imports = std::make_unique<Import::Queue> (Import::pythonSteps (Library::defaultRoot()));
     std::unique_ptr<FileChooser> chooser;
-
-    void startImport (const File& f, const String& url)
-    {
-        importing = std::make_unique<ImportThread> (*this, f, url);
-        importing->startThread();
-        importButton.setButtonText ("Cancelar");
-    }
 
     void showImportMenu()
     {
-        PopupMenu m;
-        m.addItem (String (u8"Archivo…"), [this] { chooseFileToImport(); });
-        m.addItem (String (u8"Desde YouTube…"), [this] { askForUrl(); });
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
+        Import::menu (imports->snapshot(), [this] (const Import::MenuAction& a)
+        {
+            using A = Import::MenuAction;
+            switch (a.kind)
+            {
+                case A::addFiles:      return chooseFilesToImport();
+                case A::addUrl:        return askForUrl();
+                case A::cancel:        imports->cancel (a.job.id); return;
+                case A::clearFinished: imports->clearFinished(); return;
+                case A::showError:
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo importar " + a.job.name, a.job.error);
+                    return;
+            }
+        }).showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
     }
 
-    void chooseFileToImport()
+    void chooseFilesToImport()
     {
-        chooser = std::make_unique<FileChooser> (String (u8"Canción para separar"), File::getSpecialLocation (File::userMusicDirectory),
-                                                 "*.wav;*.mp3;*.flac;*.m4a;*.ogg");
-        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc)
+        chooser = std::make_unique<FileChooser> (String (u8"Canciones para separar"), File::getSpecialLocation (File::userMusicDirectory),
+                                                 "*" + Import::audioExtensions.joinIntoString (";*"));
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::canSelectMultipleItems,
+                              [this] (const FileChooser& fc)
         {
-            if (auto f = fc.getResult(); f.existsAsFile())
-                startImport (f, {});
+            for (auto& f : fc.getResults())
+                if (Import::isImportableFile (f))
+                    imports->addFile (f);
         });
+    }
+
+    // Audio files dropped on the window join the queue.
+    bool isInterestedInFileDrag (const StringArray& files) override
+    {
+        for (auto& f : files)
+            if (Import::audioExtensions.contains (File (f).getFileExtension().toLowerCase()))
+                return true;
+        return false;
+    }
+
+    void filesDropped (const StringArray& files, int, int) override
+    {
+        for (auto& f : files)
+            if (Import::isImportableFile (File (f)))
+                imports->addFile (File (f));
     }
 
     std::unique_ptr<AlertWindow> urlDialog;
@@ -290,28 +251,29 @@ private:
                 return;
 
             if (PythonWorker::isDownloadableUrl (url))
-                startImport ({}, url);
+                imports->addUrl (url);
             else
                 AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, String (u8"Enlace no válido"), "Pega un enlace que empiece con https://");
         }), false);
     }
 
-    // Stems are in the shared library now (Electron sees the song too); open it here.
-    void importFinished (const PythonWorker::Outcome& o, const String& name)
+    void importsChanged()
     {
-        importing = nullptr;
-        importButton.setButtonText ("Importar");
-        refreshButtons();
+        const int n = imports->pending();
+        importButton.setButtonText (n > 0 ? "Importar (" + String (n) + ")" : String ("Importar"));
+        if (auto text = imports->statusText(); text.isNotEmpty())
+            status.setText (text, dontSendNotification);
+        else
+            refreshButtons();
+    }
 
-        if (! o.ok)
-        {
-            if (! o.cancelled)
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo importar " + name, o.error);
+    // Stems are in the shared library now (Electron sees the song too). It opens here only when
+    // nothing else is open, so a queue finishing doesn't pull the user out of the song they practise.
+    void songImported (const String& name)
+    {
+        if (currentSong.has_value() || edit->getTransport().isPlaying() || edit->getTransport().isRecording())
             return;
-        }
-
-        songs = Library::scan (Library::defaultRoot());
-        for (auto& song : songs)
+        for (auto& song : Library::scan (Library::defaultRoot()))
             if (song.name == name)
                 return openEdit (projectFile (song.name), &song);
     }
@@ -487,7 +449,7 @@ private:
     void showSongsMenu (const CloudUi::Listing& l)
     {
         listing = l;
-        auto m = CloudUi::songsMenu (l, currentSong.has_value() ? currentSong->name : String(), cloud.busy(), importing != nullptr,
+        auto m = CloudUi::songsMenu (l, currentSong.has_value() ? currentSong->name : String(), cloud.busy(), imports->pending() > 0,
                                      Library::defaultRoot(), [this] (const CloudUi::Action& a) { songAction (a); });
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton));
     }
@@ -841,7 +803,7 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        if (importing == nullptr && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
+        if (imports->pending() == 0 && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
                                            : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "
