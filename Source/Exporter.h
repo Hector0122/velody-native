@@ -17,8 +17,9 @@ public:
     using Progress = std::function<void (int done, int total)>;
     using Done = std::function<void (const String& error)>; // empty = every file written
 
-    Exporter (te::Edit& e, Array<Item> list, Format f, Progress p, Done d)
-        : edit (e), items (std::move (list)), format (f), onProgress (std::move (p)), onDone (std::move (d)) {}
+    // `range`: edit-time seconds to render (the song's trim); empty = from 0 to the end of the content.
+    Exporter (te::Edit& e, Array<Item> list, Format f, Progress p, Done d, std::optional<std::pair<double, double>> range = {})
+        : edit (e), items (std::move (list)), format (f), onProgress (std::move (p)), onDone (std::move (d)), timeRange (range) {}
 
     ~Exporter() { *alive = false; } // late callbacks become no-ops; the handle cancels the render
 
@@ -53,6 +54,7 @@ private:
     Format format;
     Progress onProgress;
     Done onDone;
+    std::optional<std::pair<double, double>> timeRange;
     int index = 0;
     std::shared_ptr<te::EditRenderer::Handle> handle;
     std::shared_ptr<bool> alive = std::make_shared<bool> (true);
@@ -74,7 +76,8 @@ private:
         p.destFile = wav;
         p.audioFormat = edit.engine.getAudioFileFormatManager().getWavFormat();
         p.bitDepth = format == Format::wav ? 24 : 16;
-        p.time = { te::TimePosition(), te::TimePosition::fromSeconds (SongEdit::contentLength (edit)) };
+        const auto [from, to] = timeRange.value_or (std::make_pair (0.0, SongEdit::contentLength (edit)));
+        p.time = { te::TimePosition::fromSeconds (from), te::TimePosition::fromSeconds (to) };
         if (! item.tracks.isZero())
             p.tracksToDo = item.tracks;
 

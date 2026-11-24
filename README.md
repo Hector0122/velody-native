@@ -9,6 +9,7 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 - **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documentos/Velody/<canción>.tracktionedit`.
 - **Metrónomo**: al abrir una canción ya analizada (con BPM en su `.velody`) se agrega una pista *Metrónomo* después de los stems, con los mismos clicks y acentos que el metrónomo de Electron (rejilla de beats, "el 1" manual o detectado). Se regenera cada vez que abres la canción; mute/volumen como cualquier pista.
 - **Inicio de la música**: al abrir una canción el cursor se coloca donde empieza a sonar (se salta el silencio inicial, como en Electron); **⏮ Inicio** regresa ahí.
+- **Recorte** (botón junto a ⏮ Inicio, como los *trim points* de Electron): *Empezar aquí* / *Terminar aquí* en el cursor y *Quitar recorte*, para saltarte una intro u outro larga. La canción abre en el inicio del recorte, ⏮ Inicio regresa ahí, la reproducción se detiene sola al cruzar el fin (no mientras grabas, y puedes seguir escuchando lo que está después si das Play ahí) y **Exportar** saca solo ese tramo. Se guarda en el `.velody` (`trimStart`/`trimEnd`, igual que Electron) y viaja con la nube; los archivos de audio no se tocan. El botón dice *Recorte ✓* cuando la canción tiene uno. (A diferencia de Electron, la línea de tiempo no sombrea lo recortado.)
 - **Acordes**: a la derecha de la segunda fila, grande, el acorde que suena → el siguiente (del análisis del `.velody`; siguen la velocidad).
 - **Count-in** (selector arriba): 1 o 2 compases de clicks sobre la rejilla de la canción antes de que entre, desde donde esté el cursor. Se guarda en el `.velody` de la canción (`playbackCountInBars`, igual que Electron), así que viaja con la nube.
 - **Sonido del metrónomo** (selector junto al count-in): Woodblock, Beep, Clave o Cencerro. Se guarda para todas las canciones (`~/.config/Velody/Velody.settings`) y también lo usa el count-in.
@@ -90,6 +91,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/CloudSync.h` — sincronización: lista combinada, subir, descargar, metadatos, quitar/borrar (port de `cloud/sync.ts`).
 - `Source/CloudUi.h` — menú *Canciones* con estados de la nube, hilo de transferencias y ventana *Nube…* (también la usa *Vibes…*).
 - `Source/Setup.h` — instalación inicial (Python, venv, paquetes, ffmpeg) y su ventana (port de `main/setup`).
+- `Source/Trim.h` — recorte de inicio/fin por canción (en el `.velody`).
 - `Source/LibraryAnalysis.h` — análisis en segundo plano de las canciones sin análisis.
 - `Source/PracticeMeta.h` — velocidad/tono/count-in en el `.velody`.
 - `Source/Vibes.h` — Vibes → Velody: lista de canciones mandadas desde Vibes, descarga a la cola y quitarlas de la lista.
@@ -122,7 +124,8 @@ Otros faltantes, por prioridad:
 - ~~Analizar en segundo plano las canciones sin análisis~~ — hecho.
 - **Imprescindible**: decidir dónde quedan `cloud-worker/` y `MOBILE_APP.md` cuando se archive el repo de Electron.
 - ~~Volumen master y *Mix Pan*~~, ~~calidad de stems~~ — hecho.
-- **Recomendable**: puntos de recorte (inicio/fin, en `.velody`), count-in al grabar, buscador de canciones.
+- ~~Puntos de recorte~~ — hecho.
+- **Recomendable**: count-in al grabar, buscador de canciones.
 - **Opcional**: marcadores + loop A-B, aviso de actualización, botón *Tabs*, grabar en MP3, AppImage.
 - **No se porta** (decisión): setlists / Live mode, corregir "el 1" o el BPM a mano, importar enlaces en lote, guardar las tomas en la biblioteca.
 

@@ -11,6 +11,7 @@
 #include "SongInfo.h"
 #include "SongDelete.h"
 #include "PracticeMeta.h"
+#include "Trim.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -34,7 +35,7 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &chordDisplay, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &trimButton, &chordDisplay, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
         speedLabel.setText ("Velocidad", dontSendNotification);
@@ -91,6 +92,19 @@ public:
         exportButton.onClick = [this] { showExportMenu(); };
         startButton.setTooltip (String (u8"Ir a donde empieza la música"));
         startButton.onClick = [this] { goToMusicStart(); };
+        trimButton.setTooltip (String (u8"Recorte: dónde empieza y termina la canción para ti (se salta una intro larga); se guarda en la canción"));
+        trimButton.onClick = [this] { showTrimMenu(); };
+        // The trim's end: playback stops there.
+        trimTimer.fn = [this]
+        {
+            auto& t = edit->getTransport();
+            const double pos = t.getPosition().inSeconds() * speed();
+            const bool stop = Trim::shouldStop (trim, lastTrimCheck, pos, t.isPlaying(), t.isRecording());
+            lastTrimCheck = pos;
+            if (stop)
+                stopPlayback();
+        };
+        trimTimer.startTimer (30);
         chordDisplay.songTime = [this] { return edit != nullptr ? edit->getTransport().getPosition().inSeconds() * speed() : 0.0; };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
@@ -142,6 +156,7 @@ public:
             b->setBounds (top.removeFromLeft (w).reduced (2));
         auto row = r.removeFromTop (30);
         startButton.setBounds (row.removeFromLeft (70).reduced (2));
+        trimButton.setBounds (row.removeFromLeft (80).reduced (2));
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
         soundBox.setBounds (row.removeFromLeft (120).reduced (2));
         speedLabel.setBounds (row.removeFromLeft (70));
@@ -172,7 +187,38 @@ private:
 
     static inline const Identifier musicStartProp { "velodyMusicStart" }; // cached: decoding stems takes a moment
 
-    void goToMusicStart() { edit->getTransport().setPosition (te::TimePosition::fromSeconds (musicStart / speed())); }
+    // The trim's start when there is one, else where the music starts (leading silence skipped).
+    void goToMusicStart() { edit->getTransport().setPosition (te::TimePosition::fromSeconds ((trim.start > 0 ? trim.start : musicStart) / speed())); }
+
+    TextButton trimButton { "Recorte" };
+    double lastTrimCheck = 0;
+    Trim::Range trim;
+
+    void showTrimMenu()
+    {
+        if (! currentSong.has_value())
+            return;
+        const double pos = edit->getTransport().getPosition().inSeconds() * speed();
+        Trim::menu (trim, pos, [this, pos] (Trim::Action a)
+        {
+            std::optional<Trim::Range> next;
+            if (a.kind == Trim::Action::setStart) next = Trim::withStart (trim, pos);
+            if (a.kind == Trim::Action::setEnd)   next = Trim::withEnd (trim, pos);
+            if (a.kind == Trim::Action::clear)    next = Trim::Range();
+            if (! next || ! currentSong.has_value())
+                return;
+            trim = *next;
+            Trim::save (currentSong->dir, trim);
+            refreshTrimButton();
+            status.setText (Trim::describe (trim), dontSendNotification);
+        }).showMenuAsync (PopupMenu::Options().withTargetComponent (trimButton));
+    }
+
+    void refreshTrimButton()
+    {
+        trimButton.setButtonText (trim.active() ? String (u8"Recorte ✓") : String ("Recorte"));
+        trimButton.setEnabled (currentSong.has_value());
+    }
     std::optional<Library::Song> currentSong;
     File currentEditFile;
 
@@ -276,7 +322,7 @@ private:
         refreshClickTrack();
         status.setText (String (u8"Análisis listo: metrónomo, count-in y acordes"), dontSendNotification);
     }
-    struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer;
+    struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer, trimTimer;
 
     // `manual` ("Traer de Vibes"): says what happened; the automatic checks stay quiet when offline.
     void checkVibes (bool manual)
@@ -478,7 +524,9 @@ private:
                     else
                         first.revealToUser();
                 });
-            });
+            },
+            // The song's trim: the export covers what plays.
+            trim.active() ? std::optional (Trim::renderRange (trim, SongEdit::contentLength (*edit), speed())) : std::nullopt);
         exporter->start();
     }
 
@@ -524,7 +572,10 @@ private:
         refreshClickTrack(); // also applies the speed/pitch to the new click clip
         applyPractice();
 
-        // Like Electron: start where the music starts (leading silence skipped) unless the cursor was moved.
+        // Like Electron: start where the music starts (leading silence skipped), or at the trim's start,
+        // unless the cursor was moved.
+        trim = song != nullptr ? Trim::load (song->dir) : Trim::Range();
+        refreshTrimButton();
         musicStart = 0;
         if (song != nullptr)
         {
