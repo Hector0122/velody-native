@@ -5,6 +5,8 @@
 #include "SongEdit.h"
 #include "MixerPanel.h"
 #include "CountInPlugin.h"
+#include "PythonWorker.h"
+#include "SongMeta.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -21,7 +23,7 @@ class MainComponent : public Component,
 public:
     MainComponent()
     {
-        Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
+        Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &audioButton, &pluginsButton, &playButton, &recordButton,
                                              &newTrackButton, &deleteButton, &folderButton, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
@@ -52,6 +54,7 @@ public:
         countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
+        importButton.onClick = [this] { if (separation != nullptr) separation->signalThreadShouldExit(); else chooseFileToImport(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
@@ -70,6 +73,7 @@ public:
 
     ~MainComponent() override
     {
+        separation = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         save();
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
@@ -84,8 +88,8 @@ public:
     {
         auto r = getLocalBounds();
         auto top = r.removeFromTop (34);
-        const int w = 110;
-        for (auto* b : { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
+        const int w = 100;
+        for (auto* b : { &songsButton, &importButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
         auto row = r.removeFromTop (30);
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
@@ -106,7 +110,7 @@ private:
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<EditComponent> editComponent;
 
-    TextButton songsButton { "Canciones" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
+    TextButton songsButton { "Canciones" }, importButton { "Importar" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
@@ -151,6 +155,92 @@ private:
     CountInPlugin* countIn = nullptr;
 
     Array<Library::Song> songs;
+
+    // Separation runs separate.py on a background thread; one song at a time.
+    // shortcut: no queue and no bitrate choice (separate.py's default), unlike Electron's import screen.
+    struct SeparationThread : Thread
+    {
+        SeparationThread (MainComponent& o, File f) : Thread ("Separación"), owner (&o), audio (std::move (f)) {}
+        ~SeparationThread() override { stopThread (15000); }
+
+        void run() override
+        {
+            auto outcome = PythonWorker::run (PythonWorker::separateArgs (audio, Library::defaultRoot()),
+                                              [this] (int pct) { post ([pct] (MainComponent& m) { m.showSeparationProgress (pct); }); },
+                                              [this] { return threadShouldExit(); });
+            if (outcome.ok && ! threadShouldExit())
+                analyse();
+            post ([outcome] (MainComponent& m) { m.separationFinished (outcome); });
+        }
+
+        // Like Electron after a separation: BPM/beat grid/downbeat/chords into .velody, so the new
+        // song has a metronome and count-in. A failed detection isn't saved (it can be retried).
+        void analyse()
+        {
+            post ([] (MainComponent& m) { m.status.setText ("Analizando tempo y acordes…", dontSendNotification); });
+            for (auto& song : Library::scan (Library::defaultRoot()))
+                if (song.name == audio.getFileNameWithoutExtension())
+                    if (auto stem = SongMeta::pickBeatTrackingStem (song.stems); stem.existsAsFile())
+                        if (auto patch = SongMeta::analysisPatch (PythonWorker::lastLine (PythonWorker::detectBpmArgs (stem),
+                                                                                         [this] { return threadShouldExit(); })))
+                            SongMeta::update (song.dir, *patch);
+        }
+
+        void post (std::function<void (MainComponent&)> fn)
+        {
+            MessageManager::callAsync ([o = owner, fn] { if (o != nullptr) fn (*o); });
+        }
+
+        Component::SafePointer<MainComponent> owner;
+        File audio;
+    };
+
+    std::unique_ptr<SeparationThread> separation;
+    std::unique_ptr<FileChooser> chooser;
+
+    void chooseFileToImport()
+    {
+        chooser = std::make_unique<FileChooser> ("Canción para separar", File::getSpecialLocation (File::userMusicDirectory),
+                                                 "*.wav;*.mp3;*.flac;*.m4a;*.ogg");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc)
+        {
+            auto f = fc.getResult();
+            if (! f.existsAsFile())
+                return;
+
+            separation = std::make_unique<SeparationThread> (*this, f);
+            separation->startThread();
+            importButton.setButtonText ("Cancelar");
+            showSeparationProgress (0);
+        });
+    }
+
+    void showSeparationProgress (int pct)
+    {
+        if (separation != nullptr)
+            status.setText ("Separando " + separation->audio.getFileNameWithoutExtension() + "…  " + String (pct) + " %", dontSendNotification);
+    }
+
+    // Stems are in the shared library now (Electron sees the song too); open it here.
+    void separationFinished (const PythonWorker::Outcome& o)
+    {
+        const auto name = separation->audio.getFileNameWithoutExtension();
+        separation = nullptr;
+        importButton.setButtonText ("Importar");
+        refreshButtons();
+
+        if (! o.ok)
+        {
+            if (! o.cancelled)
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo separar " + name, o.error);
+            return;
+        }
+
+        songs = Library::scan (Library::defaultRoot());
+        for (auto& song : songs)
+            if (song.name == name)
+                return openEdit (projectFile (song.name), &song);
+    }
 
     void save() { te::EditFileOperations (*edit).save (true, true, false); }
 
@@ -384,12 +474,13 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        status.setText (dev == nullptr ? "Sin interfaz de audio"
-                                       : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
-                                         + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "
-                                         + String (1000.0 * (dev->getInputLatencyInSamples() + dev->getOutputLatencyInSamples())
-                                                   / jmax (1.0, dev->getCurrentSampleRate()), 1) + " ms",
-                        dontSendNotification);
+        if (separation == nullptr) // while separating, the status shows the progress instead
+            status.setText (dev == nullptr ? "Sin interfaz de audio"
+                                           : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
+                                             + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "
+                                             + String (1000.0 * (dev->getInputLatencyInSamples() + dev->getOutputLatencyInSamples())
+                                                       / jmax (1.0, dev->getCurrentSampleRate()), 1) + " ms",
+                            dontSendNotification);
 
         // Like Electron: no recording over a stretched/transposed song (the take wouldn't line up).
         recordButton.setEnabled (t.isRecording() || (speed() == 1.0 && semitones() == 0));

@@ -20,6 +20,7 @@ juce_add_gui_app(Velody
 juce_generate_juce_header(Velody)
 
 target_sources(Velody PRIVATE Source/Main.cpp)
+target_compile_definitions(Velody PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker")
 
 # The Tracktion demo components (timeline, plugin windows) are reused as-is from the submodule.
 target_include_directories(Velody PRIVATE libs/tracktion_engine/examples)
@@ -56,8 +57,8 @@ endif()
 enable_testing()
 juce_add_console_app(VelodyTests PRODUCT_NAME "VelodyTests")
 juce_generate_juce_header(VelodyTests)
-target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp)
-target_compile_definitions(VelodyTests PRIVATE JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp Tests/PythonWorkerTests.cpp Tests/SongMetaTests.cpp)
+target_compile_definitions(VelodyTests PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker" JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
 target_link_libraries(VelodyTests PRIVATE
     tracktion::tracktion_core tracktion::tracktion_engine tracktion::tracktion_graph
     juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils

@@ -17,6 +17,7 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 - La línea de tiempo muestra la canción completa (se reajusta al cambiar la velocidad).
 - **Velocidad** (50–150 %) y **Tono** (±12 semitonos): en tiempo real con Signalsmith Stretch (la misma librería que Electron); la velocidad no cambia el tono. El metrónomo y el count-in siguen la velocidad; el tono no afecta el click. Arrancan con `practiceSpeed`/`transposeSemitones` de Electron. Grabar se desactiva mientras no estén en 100 % / 0 st (igual que en Electron).
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
+- **Importar**: eliges un archivo (wav/mp3/flac/m4a/ogg), se separa con Demucs (`python-worker/separate.py`, la venv de Electron en `~/.local/share/velody/venv`) y se analiza el tempo, la rejilla y los acordes (`detect_bpm.py`). La canción queda en la biblioteca compartida, así que también aparece en Electron, y se abre sola al terminar. Mientras corre, el botón dice **Cancelar**.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
 - Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada, con el monitoreo apagado (se prende en **I → Input Monitoring**; con bocinas causa retroalimentación).
@@ -49,6 +50,8 @@ La primera compilación tarda varios minutos (compila JUCE y Tracktion completos
 cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
+Prueba real de separación (opcional, tarda): `VELODY_E2E_SEPARATE=/ruta/a/cancion.wav ./build/VelodyTests_artefacts/Release/VelodyTests`. Los stems van a una carpeta temporal, no a la biblioteca.
+
 ## Correr con baja latencia (PipeWire)
 
 ```bash
@@ -71,6 +74,9 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/MixerPanel.h` — volumen y pan por pista.
 - `Source/Metronome.h` — lectura del `.velody`, clicks del metrónomo y count-in (port de `downbeat.ts`).
 - `Source/CountInPlugin.h` — plugin del bus master que silencia la canción y toca el count-in.
+- `Source/PythonWorker.h` — lanza los scripts de Python y lee su JSON (con SIGTERM para cancelar).
+- `Source/SongMeta.h` — escribe el `.velody` igual que `updateMeta` de Electron.
+- `python-worker/` — copia de los scripts de Python de Electron (Demucs, BPM, acordes).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
 
