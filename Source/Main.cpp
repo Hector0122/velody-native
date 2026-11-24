@@ -10,6 +10,7 @@
 #include "Exporter.h"
 #include "SongInfo.h"
 #include "SongDelete.h"
+#include "PracticeMeta.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -46,7 +47,12 @@ public:
         for (auto* sl : { &speedSlider, &pitchSlider })
         {
             sl->setTextBoxStyle (Slider::TextBoxRight, false, 60, 22);
-            sl->onValueChange = [this] { applyPractice(); };
+            sl->onValueChange = [this] // only a user change gets here (opening sets them silently)
+            {
+                applyPractice();
+                if (currentSong.has_value())
+                    PracticeMeta::saveSpeedPitch (currentSong->dir, speed(), semitones());
+            };
         }
 
         countInBox.addItemList (StringArray (String ("Sin count-in"), String (u8"Count-in 1 compás"), String ("Count-in 2 compases")), 1);
@@ -59,7 +65,7 @@ public:
             settings.setValue ("clickSound", soundBox.getSelectedItemIndex());
             refreshClickTrack();
         };
-        countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
+        countInBox.onChange = [this] { if (currentSong.has_value()) PracticeMeta::saveCountIn (currentSong->dir, countInBox.getSelectedId() - 1); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
         importButton.onClick = [this] { showImportMenu(); };
@@ -69,6 +75,9 @@ public:
         vibesTimer.fn = [this] { checkVibes (false); };
         vibesTimer.startTimer (5 * 60 * 1000);
         Timer::callAfterDelay (3000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->checkVibes (false); });
+        // First run (or a broken install): the setup window opens by itself, like Electron's SetupScreen.
+        if (! Setup::ready())
+            Timer::callAfterDelay (500, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->showSetup(); });
         exportButton.onClick = [this] { showExportMenu(); };
         startButton.setTooltip (String (u8"Ir a donde empieza la música"));
         startButton.onClick = [this] { goToMusicStart(); };
@@ -180,8 +189,7 @@ private:
     double appliedSpeed = 1;
     MixerPanel mixer;
 
-    static inline const Identifier countInProp { "velodyCountInBars" }, // saved in the song's edit
-                                   speedProp { "velodySpeed" }, pitchProp { "velodySemitones" };
+    // Speed, transpose and count-in live in the song's .velody (PracticeMeta): they sync with the cloud.
     Metronome::SongMeta songMeta; // bpm 0 when the open edit isn't an analyzed song
     CountInPlugin* countIn = nullptr;
 
@@ -203,6 +211,7 @@ private:
                 case A::addUrl:        return askForUrl();
                 case A::fetchVibes:    return checkVibes (true);
                 case A::vibesSettings: return showVibesSettings();
+                case A::setup:         return showSetup();
                 case A::cancel:        imports->cancel (a.job.id); return;
                 case A::clearFinished: imports->clearFinished(); return;
                 case A::showError:
@@ -233,6 +242,18 @@ private:
             else if (manual)
                 status.setText ("Nada nuevo desde Vibes", dontSendNotification);
         });
+    }
+
+    void showSetup()
+    {
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = String (u8"Instalación");
+        o.dialogBackgroundColour = getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+        o.content.setOwned (new Setup::Panel (Setup::defaultPaths(), Setup::systemEnv()));
+        o.launchAsync();
     }
 
     void showVibesSettings()
@@ -434,13 +455,15 @@ private:
 
         songMeta = song != nullptr ? Metronome::readMeta (song->dir) : Metronome::SongMeta();
         countIn = CountInPlugin::findOrInsert (*edit);
-        countInBox.setSelectedId ((int) edit->state.getProperty (countInProp, songMeta.countInBars) + 1, dontSendNotification);
+        // Practice values from the .velody (an older edit-only value is moved there once).
+        const auto practice = song != nullptr ? PracticeMeta::load (song->dir, edit->state) : PracticeMeta::Values();
+        // shortcut: the selector offers 0–2 bars; a longer count-in saved by Electron shows as 2 (kept in .velody until changed here).
+        countInBox.setSelectedId (jlimit (0, 2, practice.countInBars) + 1, dontSendNotification);
         countInBox.setEnabled (songMeta.bpm > 0);
 
-        // Speed/pitch start from Electron's saved practice values; changes here stay in this edit.
         appliedSpeed = 1;
-        speedSlider.setValue (100 * Metronome::clampSpeed (edit->state.getProperty (speedProp, songMeta.practiceSpeed)), dontSendNotification);
-        pitchSlider.setValue (Metronome::clampSemitones (edit->state.getProperty (pitchProp, songMeta.transposeSemitones)), dontSendNotification);
+        speedSlider.setValue (100 * practice.speed, dontSendNotification);
+        pitchSlider.setValue (practice.semitones, dontSendNotification);
         speedSlider.setEnabled (song != nullptr);
         pitchSlider.setEnabled (song != nullptr);
         refreshClickTrack(); // also applies the speed/pitch to the new click clip
@@ -763,8 +786,6 @@ private:
         if (edit == nullptr)
             return;
 
-        edit->state.setProperty (speedProp, speed(), nullptr);
-        edit->state.setProperty (pitchProp, semitones(), nullptr);
 
         // Keep the same spot in the song when the speed (and so the edit timeline) changes.
         auto& t = edit->getTransport();

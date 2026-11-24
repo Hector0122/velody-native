@@ -4,6 +4,7 @@
 #include "Library.h"
 #include "PythonWorker.h"
 #include "SongMeta.h"
+#include "Setup.h"
 
 // Import queue, like Electron's JobManager: songs (files or YouTube links) are imported one at a time
 // on a background thread — (download →) separate.py → detect_bpm.py. Queued jobs can be cancelled,
@@ -51,15 +52,26 @@ namespace Import
     };
 
     // The real workers, writing into the library at `root`.
+    inline PythonWorker::Outcome notInstalled()
+    {
+        PythonWorker::Outcome o;
+        o.error = String (u8"Falta la instalación de Demucs: Importar → Instalación (Demucs)…");
+        return o;
+    }
+
     inline Steps pythonSteps (File root)
     {
         Steps s;
         s.download = [] (const String& url, auto onProgress, auto onUpdating, Stop stop)
         {
+            if (! Setup::ready())
+                return notInstalled();
             return PythonWorker::download (PythonWorker::downloadArgs (url), PythonWorker::updateYtDlpArgs(), onProgress, onUpdating, stop);
         };
         s.separate = [root] (const File& audio, auto onProgress, Stop stop)
         {
+            if (! Setup::ready())
+                return notInstalled();
             return PythonWorker::run (PythonWorker::separateArgs (audio, root), onProgress, stop);
         };
         // Like Electron after a separation: BPM/beat grid/downbeat/chords into .velody, so the new
@@ -337,7 +349,7 @@ namespace Import
 
     struct MenuAction
     {
-        enum Kind { addFiles, addUrl, fetchVibes, vibesSettings, cancel, showError, clearFinished } kind;
+        enum Kind { addFiles, addUrl, fetchVibes, vibesSettings, setup, cancel, showError, clearFinished } kind;
         Job job {};
     };
 
@@ -350,6 +362,7 @@ namespace Import
         m.addItem (String (u8"Desde YouTube…"), [act] { act ({ MenuAction::addUrl }); });
         m.addItem ("Traer lo que mandaste desde Vibes", [act] { act ({ MenuAction::fetchVibes }); });
         m.addItem (String (u8"Vibes…"), [act] { act ({ MenuAction::vibesSettings }); });
+        m.addItem (String (u8"Instalación (Demucs)…"), [act] { act ({ MenuAction::setup }); });
         if (jobs.empty())
             return m;
 

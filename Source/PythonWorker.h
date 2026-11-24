@@ -79,7 +79,8 @@ namespace PythonWorker
                 ::close (fd);
         }
 
-        bool start (const StringArray& args)
+        // `mergeStderr`: stderr comes through the same pipe (pip writes its progress and errors there).
+        bool start (const StringArray& args, bool mergeStderr = false)
         {
             int fds[2];
             if (::pipe (fds) != 0)
@@ -88,6 +89,8 @@ namespace PythonWorker
             posix_spawn_file_actions_t fa;
             posix_spawn_file_actions_init (&fa);
             posix_spawn_file_actions_adddup2 (&fa, fds[1], STDOUT_FILENO);
+            if (mergeStderr)
+                posix_spawn_file_actions_adddup2 (&fa, fds[1], STDERR_FILENO);
             posix_spawn_file_actions_addclose (&fa, fds[0]);
             posix_spawn_file_actions_addclose (&fa, fds[1]);
 
@@ -175,11 +178,11 @@ namespace PythonWorker
     struct Ran { bool started = false, stopped = false, timedOut = false; int code = -1; };
 
     inline Ran drain (const StringArray& args, std::function<void (const String&)> onLine,
-                      std::function<bool()> shouldStop, int timeoutMs)
+                      std::function<bool()> shouldStop, int timeoutMs, bool mergeStderr = false)
     {
         Ran r;
         Process p;
-        if (! (r.started = p.start (args)))
+        if (! (r.started = p.start (args, mergeStderr)))
             return r;
 
         const auto deadline = Time::getMillisecondCounter() + (uint32) timeoutMs;
