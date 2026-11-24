@@ -15,7 +15,7 @@ juce_add_gui_app(Velody
     BUNDLE_ID "com.velody.native"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Velody graba desde tu interfaz de audio"
-    NEEDS_CURL FALSE
+    NEEDS_CURL TRUE # HTTPS for cloud sync (JUCE's Linux HTTP backend is curl)
     NEEDS_WEB_BROWSER FALSE)
 
 juce_generate_juce_header(Velody)
@@ -36,7 +36,7 @@ target_compile_definitions(Velody PRIVATE
     $<$<PLATFORM_ID:Linux>:JUCE_JACK=1>
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
-    JUCE_USE_CURL=0
+    JUCE_USE_CURL=1
     JUCE_WEB_BROWSER=0)
 
 target_link_libraries(Velody PRIVATE
@@ -46,6 +46,7 @@ target_link_libraries(Velody PRIVATE
     juce::juce_audio_devices
     juce::juce_audio_processors
     juce::juce_audio_utils
+    juce::juce_cryptography
     juce::juce_recommended_config_flags)
 
 if (APPLE)
@@ -56,13 +57,13 @@ endif()
 
 # Unit tests (juce::UnitTest, no extra dependency): ctest --test-dir build
 enable_testing()
-juce_add_console_app(VelodyTests PRODUCT_NAME "VelodyTests")
+juce_add_console_app(VelodyTests PRODUCT_NAME "VelodyTests" NEEDS_CURL TRUE)
 juce_generate_juce_header(VelodyTests)
-target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp Tests/PythonWorkerTests.cpp Tests/SongMetaTests.cpp Tests/ExporterTests.cpp Tests/SongInfoTests.cpp Tests/SongDeleteTests.cpp)
-target_compile_definitions(VelodyTests PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker" JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=0 JUCE_WEB_BROWSER=0)
+target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp Tests/PythonWorkerTests.cpp Tests/SongMetaTests.cpp Tests/ExporterTests.cpp Tests/SongInfoTests.cpp Tests/SongDeleteTests.cpp Tests/CloudTests.cpp Tests/CloudUiTests.cpp)
+target_compile_definitions(VelodyTests PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker" JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=1 JUCE_WEB_BROWSER=0)
 target_link_libraries(VelodyTests PRIVATE
     tracktion::tracktion_core tracktion::tracktion_engine tracktion::tracktion_graph
-    juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils
+    juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils juce::juce_cryptography
     juce::juce_recommended_config_flags)
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(VelodyTests PRIVATE -latomic)
@@ -88,6 +89,6 @@ set(CPACK_DEBIAN_PACKAGE_SECTION sound)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON) # library dependencies worked out from the binary
 # JUCE dlopens X11, JACK and GIO (trash) at runtime, so shlibdeps can't see them: listed by hand.
 # Separation/analysis use Python + ffmpeg; Demucs lives in the venv the Electron app's setup creates.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "python3, ffmpeg, libx11-6, libxext6, libxrandr2, libxinerama1, libxcursor1, libxi6, libxrender1, libglib2.0-0t64 | libglib2.0-0")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "python3, ffmpeg, libx11-6, libxext6, libxrandr2, libxinerama1, libxcursor1, libxi6, libxrender1, libglib2.0-0t64 | libglib2.0-0, libcurl4t64 | libcurl4")
 set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "pipewire-jack | libjack-jackd2-0")
 include(CPack)

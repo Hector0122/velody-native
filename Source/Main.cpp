@@ -10,6 +10,7 @@
 #include "Exporter.h"
 #include "SongInfo.h"
 #include "SongDelete.h"
+#include "CloudUi.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -70,6 +71,9 @@ public:
         newTrackButton.onClick = [this] { edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1); mixer.rebuild(); resized(); };
         deleteButton.onClick = [this] { deleteSelection(); };
         folderButton.onClick = [] { projectFile().revealToUser(); };
+
+        cloud.onStatus = [this] (const String& text) { status.setText (text, dontSendNotification); };
+        cloud.cleanupStaleDownloads(); // a download cut off by a crash or quit
 
         engine.getPluginManager().createBuiltInType<CountInPlugin>(); // before any edit that has one loads
         selectionManager.addChangeListener (this);
@@ -458,35 +462,182 @@ private:
         refreshButtons();
     }
 
+    CloudUi::Controller cloud { Library::defaultRoot(), Cloud::Settings::file() };
+    bool listingSongs = false;
+
+    // With the cloud on, the list comes from the cloud first (quick timeout; offline shows local songs).
+    // During a transfer it's the local list only, so other songs can still be opened.
     void showSongsMenu()
     {
-        songs = Library::scan (Library::defaultRoot());
+        if (listingSongs)
+            return;
+        if (cloud.busy() || ! cloud.active())
+            return showSongsMenu (cloud.localListing());
 
-        PopupMenu m;
-        m.addItem (-1, String (u8"Proyecto vacío"));
-        m.addSeparator();
-        for (int i = 0; i < songs.size(); ++i)
-            m.addItem (i + 1, songs[i].name);
-        if (songs.isEmpty())
-            m.addItem (-2, "No hay canciones en " + Library::defaultRoot().getFullPathName(), false);
-        if (currentSong.has_value())
+        listingSongs = true;
+        status.setText (String (u8"Consultando la nube…"), dontSendNotification);
+        cloud.list ([this] (const CloudUi::Listing& l)
         {
-            m.addSeparator();
-            m.addItem (-3, String (u8"Quitar «") + currentSong->name + String (u8"» de esta laptop…"), importing == nullptr);
-        }
-
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton), [this] (int id)
-        {
-            if (id == -1)
-                openEdit (projectFile(), nullptr);
-            else if (id == -3)
-                confirmDeleteCurrentSong();
-            else if (id > 0)
-                openEdit (projectFile (songs[id - 1].name), &songs.getReference (id - 1));
+            listingSongs = false;
+            refreshButtons();
+            showSongsMenu (l);
         });
     }
 
-    void confirmDeleteCurrentSong()
+    void showSongsMenu (const CloudUi::Listing& l)
+    {
+        listing = l;
+        auto m = CloudUi::songsMenu (l, currentSong.has_value() ? currentSong->name : String(), cloud.busy(), importing != nullptr,
+                                     Library::defaultRoot(), [this] (const CloudUi::Action& a) { songAction (a); });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton));
+    }
+
+    CloudUi::Listing listing;
+
+    void songAction (const CloudUi::Action& a)
+    {
+        using A = CloudUi::Action;
+        switch (a.kind)
+        {
+            case A::openEmpty:       return openEdit (projectFile(), nullptr);
+            case A::open:            return openSong (a.entry);
+            case A::download:        return downloadAndOpen (a.entry);
+            case A::upload:          return uploadSong (a.entry.name);
+            case A::uploadAll:       return uploadAllLocal();
+            case A::removeCurrent:   return confirmRemoveCurrentSong (a.entry);
+            case A::deleteFromCloud: return confirmDeleteCloudOnly (a.entry);
+            case A::settings:        return showCloudSettings();
+        }
+    }
+
+    // A synced song gets the newer analysis (bpm, downbeat, chords) from the cloud before it opens.
+    void openSong (const Cloud::Entry& e)
+    {
+        if (! e.local)
+            return;
+        cloud.syncMetaOnOpen (e, [this, song = *e.local]
+        {
+            refreshButtons();
+            openEdit (projectFile (song.name), &song);
+        });
+    }
+
+    void cloudFailed (const String& title, const String& error)
+    {
+        refreshButtons();
+        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, title, error);
+    }
+
+    void downloadAndOpen (const Cloud::Entry& e)
+    {
+        cloud.download (e, [this, name = e.name] (const File&, const String& error)
+        {
+            if (error.isNotEmpty())
+                return cloudFailed ("No se pudo descargar " + name, error);
+            refreshButtons();
+            for (auto& song : Library::scan (Library::defaultRoot()))
+                if (song.name == name)
+                    return openEdit (projectFile (song.name), &song);
+        });
+    }
+
+    void uploadSong (const String& name)
+    {
+        cloud.upload (name, [this, name] (const String& error)
+        {
+            if (error.isNotEmpty())
+                return cloudFailed ("No se pudo subir " + name, error);
+            refreshButtons();
+            status.setText (String (u8"Subida a la nube: ") + name, dontSendNotification);
+        });
+    }
+
+    void uploadAllLocal()
+    {
+        StringArray names;
+        for (auto& e : listing.songs)
+            if (e.state == Cloud::State::local)
+                names.add (e.name);
+        cloud.uploadAll (names, [this] (int uploaded, const StringArray& failed)
+        {
+            refreshButtons();
+            if (! failed.isEmpty())
+                return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Se subieron " + String (uploaded) + String (u8"; fallaron:"),
+                                                         failed.joinIntoString ("\n"));
+            status.setText ("Subidas a la nube: " + String (uploaded) + " canciones", dontSendNotification);
+        });
+    }
+
+    // In the cloud too: free space here (it stays in the cloud) or delete everywhere.
+    void confirmRemoveCurrentSong (const Cloud::Entry& e)
+    {
+        if (e.state != Cloud::State::synced || ! listing.enabled || listing.offline)
+            return confirmDeleteCurrentSong (false);
+
+        AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::QuestionIcon)
+                                    .withTitle (String (u8"¿Quitar «") + e.name + String (u8"»?"))
+                                    .withMessage (String (u8"Esta canción está en esta laptop y en la nube.\n\n"
+                                                          u8"Quitar de esta laptop: libera espacio; sigue en la nube y se descarga otra vez al abrirla "
+                                                          u8"(tu proyecto aquí se conserva).\n\nBorrar en todas partes: de esta laptop y de la nube."))
+                                    .withButton ("Quitar de esta laptop", 1)
+                                    .withButton ("Borrar en todas partes", 2)
+                                    .withButton ("Cancelar", 0),
+                                [this, e] (int r)
+                                {
+                                    if (r == 1)
+                                        removeLocalCopy (e);
+                                    else if (r == 2)
+                                        confirmDeleteCurrentSong (true, e);
+                                });
+    }
+
+    void removeLocalCopy (const Cloud::Entry& e)
+    {
+        openEdit (projectFile(), nullptr); // close the song first: its folder is about to move
+        cloud.removeLocal (e, [] (const File& f) { return f.moveToTrash(); }, [this, name = e.name] (const String& error)
+        {
+            if (error.isNotEmpty())
+                return cloudFailed ("No se pudo quitar " + name, error);
+            refreshButtons();
+            status.setText (String (u8"Quitada de esta laptop (sigue en la nube): ") + name, dontSendNotification);
+        });
+    }
+
+    void confirmDeleteCloudOnly (const Cloud::Entry& e)
+    {
+        AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::WarningIcon)
+                                    .withTitle (String (u8"¿Borrar «") + e.name + String (u8"» de la nube?"))
+                                    .withMessage (String (u8"Solo está en la nube: se borra para siempre, no se puede deshacer."))
+                                    .withButton ("Borrar", 1)
+                                    .withButton ("Cancelar", 0),
+                                [this, e] (int r)
+                                {
+                                    if (r != 1)
+                                        return;
+                                    cloud.deleteFromCloud (e, [this, name = e.name] (const String& error)
+                                    {
+                                        if (error.isNotEmpty())
+                                            return cloudFailed ("No se pudo borrar " + name, error);
+                                        refreshButtons();
+                                        status.setText ("Borrada de la nube: " + name, dontSendNotification);
+                                    });
+                                });
+    }
+
+    void showCloudSettings()
+    {
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Nube";
+        o.dialogBackgroundColour = getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = false;
+        o.content.setOwned (new CloudUi::SettingsPanel (Cloud::Settings::file(), [] (const Cloud::Settings&) {}));
+        o.launchAsync();
+    }
+
+    // `everywhere`: the cloud copy goes first; the local one only once that worked.
+    void confirmDeleteCurrentSong (bool everywhere, const Cloud::Entry& entry = {})
     {
         if (! currentSong.has_value())
             return;
@@ -495,8 +646,10 @@ private:
         const auto n = plan.takes.size();
 
         auto opts = MessageBoxOptions().withIconType (MessageBoxIconType::QuestionIcon)
-                                       .withTitle (String (u8"¿Quitar «") + currentSong->name + String (u8"»?"))
-                                       .withMessage (String (u8"Se manda a la papelera: los stems y el análisis de la canción, y su proyecto aquí "
+                                       .withTitle ((everywhere ? String (u8"¿Borrar «") : String (u8"¿Quitar «")) + currentSong->name
+                                                   + (everywhere ? String (u8"» de la nube y de esta laptop?") : String (u8"»?")))
+                                       .withMessage ((everywhere ? String (u8"Se borra de la nube para siempre. ") : String())
+                                                     + String (u8"Se manda a la papelera: los stems y el análisis de la canción, y su proyecto aquí "
                                                              u8"(volúmenes, plugins, metrónomo). Puedes recuperarlos desde la papelera.")
                                                      + (n > 0 ? "\n\nTienes " + String (n) + (n == 1 ? String (u8" grabación") : String (u8" grabaciones")) + " en esta canción." : String()));
         if (n > 0)
@@ -504,11 +657,21 @@ private:
         else
             opts = opts.withButton ("Quitar", 1).withButton ("Cancelar", 0);
 
-        AlertWindow::showAsync (opts, [this, plan, n] (int result)
+        AlertWindow::showAsync (opts, [this, plan, n, everywhere, entry] (int result)
         {
             if (result == 0)
                 return;
-            deleteSong (plan, n > 0 && result == 2);
+            const bool includeTakes = n > 0 && result == 2;
+            if (! everywhere)
+                return deleteSong (plan, includeTakes);
+
+            cloud.deleteFromCloud (entry, [this, plan, includeTakes, name = entry.name] (const String& error)
+            {
+                if (error.isNotEmpty())
+                    return cloudFailed ("No se pudo borrar " + name, error + String (u8"\n\nNo se borró nada de esta laptop."));
+                refreshButtons();
+                deleteSong (plan, includeTakes);
+            });
         });
     }
 
@@ -678,7 +841,7 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        if (importing == nullptr && exporter == nullptr) // while importing/exporting, the status shows the progress instead
+        if (importing == nullptr && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
                                            : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "

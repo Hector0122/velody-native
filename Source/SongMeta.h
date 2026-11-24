@@ -8,20 +8,58 @@ namespace SongMeta
 {
     constexpr int analysisCacheVersion = 22; // velody/src/shared/analysis.ts ANALYSIS_CACHE_VERSION
 
-    // Merges `patch` into <songDir>/.velody, stamps updatedAt, and writes via temp file + rename
-    // so a reader never sees a half-written file. Unknown keys (cloudId, fileHashes, …) are kept.
-    inline bool update (const File& songDir, const NamedValueSet& patch)
+    // Keys describing this device only, never uploaded (shared/cloud.ts LOCAL_ONLY_META_KEYS).
+    inline const StringArray localOnlyKeys { "cloudId", "fileHashes" };
+
+    // Merges `patch` into <songDir>/.velody and writes via temp file + rename so a reader never sees a
+    // half-written file. Unknown keys (cloudId, fileHashes, …) are kept. Like Electron's updateMeta:
+    // `touch` stamps updatedAt (cloud sync is last-write-wins on it; device bookkeeping passes false),
+    // `replace` drops every synced key first (applying a newer cloud version).
+    inline bool update (const File& songDir, const NamedValueSet& patch, bool touch = true, bool replace = false)
     {
         auto file = songDir.getChildFile (".velody");
         auto existing = JSON::parse (file);
         DynamicObject::Ptr obj = existing.isObject() ? existing.getDynamicObject() : new DynamicObject();
 
+        if (replace)
+        {
+            DynamicObject::Ptr kept = new DynamicObject();
+            for (auto& k : localOnlyKeys)
+                if (obj->hasProperty (k))
+                    kept->setProperty (k, obj->getProperty (k));
+            obj = kept;
+        }
+
         for (auto& p : patch)
             obj->setProperty (p.name, p.value);
-        obj->setProperty ("updatedAt", Time::currentTimeMillis());
+        if (touch)
+            obj->setProperty ("updatedAt", Time::currentTimeMillis());
 
         auto tmp = file.getSiblingFile (".velody." + Uuid().toString() + ".tmp");
         return tmp.replaceWithText (JSON::toString (var (obj.get()), true)) && tmp.moveFileTo (file);
+    }
+
+    inline var read (const File& songDir)
+    {
+        auto v = JSON::parse (songDir.getChildFile (".velody"));
+        return v.isObject() ? v : var();
+    }
+
+    inline int64 updatedAt (const var& meta)
+    {
+        auto v = meta["updatedAt"];
+        return v.isInt() || v.isInt64() || v.isDouble() ? (int64) v : 0;
+    }
+
+    // The synced part of the metadata: local-only keys and updatedAt removed.
+    inline var syncedPart (const var& meta)
+    {
+        DynamicObject::Ptr out = new DynamicObject();
+        if (auto* o = meta.getDynamicObject())
+            for (auto& p : o->getProperties())
+                if (! localOnlyKeys.contains (p.name.toString()) && p.name.toString() != "updatedAt")
+                    out->setProperty (p.name, p.value);
+        return var (out.get());
     }
 
     // Beat tracking runs on the drums stem (exact name), else the next most rhythmic one (pickBeatTrackingStem).
