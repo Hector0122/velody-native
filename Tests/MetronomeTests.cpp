@@ -110,6 +110,82 @@ struct MetronomeTests : UnitTest
             expectGreaterThan (b.getMagnitude (0, 44100, 1323), 0.2f);     // click at 1.0 s
         }
         dir.deleteRecursively();
+
+        testCountIn();
+    }
+
+    void testCountIn()
+    {
+        using namespace Metronome;
+        SongMeta base; // 120 bpm grid, beats every 0.5 s from 2.0 s
+        base.bpm = 120;
+        base.firstBeatOffset = 2.0;
+        for (int i = 0; i < 40; ++i) base.beatTimes.push_back (2.0 + i * 0.5);
+
+        beginTest ("count-in: 4 clicks per bar, ending one beat before the next song beat");
+        auto cs = planCountIn (base, 3.4, 1);
+        const double want[] = { 1.5, 2.0, 2.5, 3.0 };
+        expectEquals ((int) cs.size(), 4);
+        for (int i = 0; i < 4; ++i)
+        {
+            expectWithinAbsoluteError (cs[(size_t) i].time, want[i], 1e-9);
+            expect (cs[(size_t) i].accent == (i == 0));
+        }
+
+        beginTest ("count-in: 2 bars = 8 clicks, accenting the first of each 4");
+        cs = planCountIn (base, 4.5, 2);
+        expectEquals ((int) cs.size(), 8);
+        expectWithinAbsoluteError (cs[0].time, 0.5, 1e-9);
+        expectWithinAbsoluteError (cs[7].time, 4.0, 1e-9);
+        for (size_t i = 0; i < cs.size(); ++i)
+            expect (cs[i].accent == (i % 4 == 0));
+
+        beginTest ("count-in: click count never depends on where in the bar the song starts");
+        for (double pos : { 2.0, 2.1, 2.6, 3.1, 3.6, 7.77 })
+        {
+            expectEquals ((int) planCountIn (base, pos, 1).size(), 4);
+            expectEquals ((int) planCountIn (base, pos, 2).size(), 8);
+        }
+
+        beginTest ("count-in: extrapolates backwards before the first detected beat");
+        cs = planCountIn (base, 0.9, 1);
+        expectEquals ((int) cs.size(), 4);
+        expectWithinAbsoluteError (cs[3].time, 0.5, 1e-9);
+        for (size_t i = 1; i < cs.size(); ++i)
+            expectWithinAbsoluteError (cs[i].time - cs[i - 1].time, 0.5, 1e-9);
+
+        beginTest ("count-in: constant tempo without a grid");
+        SongMeta c;
+        c.bpm = 60;
+        cs = planCountIn (c, 9.0, 1);
+        expectEquals ((int) cs.size(), 4);
+        expectWithinAbsoluteError (cs[0].time, 5.0, 1e-9);
+        expectWithinAbsoluteError (cs[3].time, 8.0, 1e-9);
+
+        beginTest ("count-in: in an intro, follows the grid spacing, not the rounded BPM");
+        SongMeta o;
+        o.bpm = 124;
+        for (int i = 0; i < 20; ++i) o.beatTimes.push_back (34.34 + i * 0.4876);
+        cs = planCountIn (o, 1.0, 1);
+        const int entry = (int) std::ceil ((1.0 - 34.34) / 0.4876 - 1e-9);
+        expectWithinAbsoluteError (34.34 + entry * 0.4876 - cs[3].time, 0.4876, 1e-6);
+        expectWithinAbsoluteError (cs[1].time - cs[0].time, 0.4876, 1e-6);
+
+        beginTest ("count-in: off returns nothing");
+        expect (planCountIn (base, 3, 0).empty());
+
+        beginTest ("renderCountIn: silences the song before the entry, clicks on time, untouched after");
+        const double sr = 1000;
+        AudioBuffer<float> buf (2, 3000); // edit time 0..3 s
+        for (int ch = 0; ch < 2; ++ch)
+            FloatVectorOperations::fill (buf.getWritePointer (ch), 0.25f, 3000);
+        Random rng (1);
+        renderCountIn (buf, 0, 3000, 0.0, sr, { { 1.0, true } }, 2.0, rng);
+        expectEquals (buf.getMagnitude (0, 0, 1000), 0.0f);                    // song muted, no click yet
+        expectGreaterThan (buf.getMagnitude (0, 1000, 30), 0.3f);              // click at 1.0 s
+        expectEquals (buf.getMagnitude (1, 1100, 900), 0.0f);                  // still muted until 2.0 s
+        expectEquals (buf.getSample (0, 2000), 0.25f);                         // song from the entry on
+        expectEquals (buf.getSample (1, 2999), 0.25f);
     }
 };
 

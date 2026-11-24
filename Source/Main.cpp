@@ -4,6 +4,7 @@
 #include "common/PluginWindow.h"
 #include "SongEdit.h"
 #include "MixerPanel.h"
+#include "CountInPlugin.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -21,7 +22,10 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &status, &mixer });
+                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &status, &mixer });
+
+        countInBox.addItemList ({ "Sin count-in", "Count-in 1 compás", "Count-in 2 compases" }, 1);
+        countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
@@ -32,6 +36,7 @@ public:
         deleteButton.onClick = [this] { deleteSelection(); };
         folderButton.onClick = [] { projectFile().revealToUser(); };
 
+        engine.getPluginManager().createBuiltInType<CountInPlugin>(); // before any edit that has one loads
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
 
@@ -58,6 +63,7 @@ public:
         const int w = 110;
         for (auto* b : { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
+        countInBox.setBounds (top.removeFromLeft (170).reduced (2));
         status.setBounds (top.reduced (4, 0));
         mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
         if (editComponent != nullptr)
@@ -74,7 +80,12 @@ private:
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
+    ComboBox countInBox;
     MixerPanel mixer;
+
+    static inline const Identifier countInProp { "velodyCountInBars" }; // saved in the song's edit
+    Metronome::SongMeta songMeta; // bpm 0 when the open edit isn't an analyzed song
+    CountInPlugin* countIn = nullptr;
 
     Array<Library::Song> songs;
 
@@ -89,6 +100,7 @@ private:
             save();
             selectionManager.deselectAll();
             mixer.setEdit (nullptr);
+            countIn = nullptr;
             editComponent = nullptr;
             edit = nullptr;
         }
@@ -108,6 +120,11 @@ private:
         auto clickWav = f.getSiblingFile (f.getFileNameWithoutExtension() + " - metronomo.wav");
         if (song != nullptr && SongEdit::writeClickWav (engine, *song, clickWav))
             SongEdit::setClickTrack (*edit, clickWav);
+
+        songMeta = song != nullptr ? Metronome::readMeta (song->dir) : Metronome::SongMeta();
+        countIn = CountInPlugin::findOrInsert (*edit);
+        countInBox.setSelectedId ((int) edit->state.getProperty (countInProp, songMeta.countInBars) + 1, dontSendNotification);
+        countInBox.setEnabled (songMeta.bpm > 0);
 
         edit->playInStopEnabled = true;
         edit->getTransport().addChangeListener (this);
@@ -150,12 +167,55 @@ private:
         auto& t = edit->getTransport();
         const bool wasRecording = t.isRecording();
 
-        if (record) EngineHelpers::toggleRecord (*edit);
-        else        EngineHelpers::togglePlay (*edit);
+        if (record)
+            EngineHelpers::toggleRecord (*edit);
+        else if (t.isPlaying())
+            stopPlayback();
+        else
+            playWithCountIn();
 
         if (wasRecording)
             save(); // keep the new take on disk right away
     }
+
+    void stopPlayback()
+    {
+        auto& t = edit->getTransport();
+        const bool inCountIn = countIn != nullptr && countIn->isArmed();
+        t.stop (false, false);
+
+        if (inCountIn)
+        {
+            countIn->disarm();
+            t.setPosition (te::TimePosition::fromSeconds (countInFrom)); // back to where Play was pressed
+        }
+    }
+
+    // Clicks on the song's grid, then the song enters exactly at the current position.
+    void playWithCountIn()
+    {
+        auto& t = edit->getTransport();
+        const int bars = countInBox.getSelectedId() - 1;
+        auto clicks = Metronome::planCountIn (songMeta, t.getPosition().inSeconds(), bars);
+
+        if (countIn != nullptr && ! clicks.empty())
+        {
+            countInFrom = t.getPosition().inSeconds();
+            countIn->arm (clicks, countInFrom);
+
+            // The transport only allows negative positions down to its own count-in length (2 bars at
+            // the edit's 120 bpm + 0.5 s = -4.5 s), so set that just for this jump.
+            // shortcut: count-in clicks earlier than -4.5 s are skipped (2 slow bars at the song start); upgrade by offsetting the song in the edit.
+            const auto oldMode = edit->getCountInMode();
+            edit->setCountInMode (te::Edit::CountIn::twoBar);
+            t.setPosition (te::TimePosition::fromSeconds (clicks.front().time));
+            edit->setCountInMode (oldMode);
+        }
+
+        t.play (false);
+    }
+
+    double countInFrom = 0;
 
     // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed (not monitored),
     // placed after the song's stem tracks so a stem is never recorded over.

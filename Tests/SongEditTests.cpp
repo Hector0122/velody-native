@@ -93,3 +93,47 @@ struct ClickTrackTests : UnitTest
 };
 
 static ClickTrackTests clickTrackTests;
+
+#include "../Source/CountInPlugin.h"
+
+struct CountInPluginTests : UnitTest
+{
+    CountInPluginTests() : UnitTest ("CountInPlugin") {}
+
+    void runTest() override
+    {
+        te::Engine engine { "VelodyTests" };
+        engine.getPluginManager().createBuiltInType<CountInPlugin>();
+        auto file = File::createTempFile (".tracktionedit");
+
+        beginTest ("one count-in plugin on the master bus, not duplicated, survives save + reopen");
+        {
+            auto edit = te::createEmptyEdit (engine, file);
+            auto p = CountInPlugin::findOrInsert (*edit);
+            expect (p != nullptr);
+            expect (CountInPlugin::findOrInsert (*edit) == p);
+            expect (! p->isArmed());
+            p->arm ({ { 1.0, true } }, 2.0);
+            expect (p->isArmed());
+            p->disarm();
+            expect (! p->isArmed());
+            te::EditFileOperations (*edit).save (true, true, false);
+        }
+
+        auto edit = te::loadEditFromFile (engine, file);
+        int n = 0;
+        for (auto p : edit->getMasterPluginList())
+            if (dynamic_cast<CountInPlugin*> (p) != nullptr) ++n;
+        expectEquals (n, 1);
+        CountInPlugin::findOrInsert (*edit);
+        n = 0;
+        for (auto p : edit->getMasterPluginList())
+            if (dynamic_cast<CountInPlugin*> (p) != nullptr) ++n;
+        expectEquals (n, 1);
+
+        edit = nullptr;
+        file.deleteFile();
+    }
+};
+
+static CountInPluginTests countInPluginTests;

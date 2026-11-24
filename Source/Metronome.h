@@ -15,6 +15,7 @@ namespace Metronome
         double bpm = 0, firstBeatOffset = 0;
         std::vector<double> beatTimes;
         int downbeatShift = 0; // manual "this is the 1" wins over the detected one
+        int countInBars = 0;   // playbackCountInBars
     };
 
     inline SongMeta readMeta (const File& songDir)
@@ -29,6 +30,8 @@ namespace Metronome
         if (auto* beats = json["beatTimes"].getArray())
             for (auto& b : *beats)
                 m.beatTimes.push_back (b);
+
+        m.countInBars = jlimit (0, 8, (int) json["playbackCountInBars"]);
 
         auto shift = json["downbeatShift"].isVoid() || json["downbeatShift"].isUndefined()
                        ? json["detectedDownbeatShift"] : json["downbeatShift"];
@@ -112,6 +115,42 @@ namespace Metronome
         return out;
     }
 
+    // Count-in before playing from `position` (port of planCountIn): bars*4 clicks on the song's own
+    // grid, ending one beat before the first beat at/after `position`, accenting each bar's first click.
+    inline std::vector<Click> planCountIn (const SongMeta& meta, double position, int bars)
+    {
+        std::vector<Click> out;
+        if (bars <= 0 || ! (meta.bpm > 0))
+            return out;
+
+        const double interval = 60.0 / meta.bpm;
+        std::function<double (int)> beatAt;
+        int entry;
+
+        if (! meta.beatTimes.empty())
+        {
+            auto grid = smoothBeatGrid (meta.beatTimes);
+            const double first = grid.front(), last = grid.back();
+            const int lastIdx = (int) grid.size() - 1;
+            const double gap = medianBeatGap (grid, interval);
+            beatAt = [=] (int i) { return i < 0 ? first + i * gap : i > lastIdx ? last + (i - lastIdx) * gap : grid[(size_t) i]; };
+
+            if (position <= first)     entry = (int) std::ceil ((position - first) / gap - 1e-9);
+            else if (position > last)  entry = lastIdx + (int) std::ceil ((position - last) / gap - 1e-9);
+            else                       entry = (int) (std::lower_bound (grid.begin(), grid.end(), position) - grid.begin());
+        }
+        else
+        {
+            beatAt = [=] (int n) { return meta.firstBeatOffset + n * interval; };
+            entry = (int) std::ceil ((position - meta.firstBeatOffset) / interval - 1e-9);
+        }
+
+        const int total = bars * beatsPerBar;
+        for (int j = 0; j < total; ++j)
+            out.push_back ({ beatAt (entry - total + j), j % beatsPerBar == 0 });
+        return out;
+    }
+
     // Woodblock click: a falling tone plus a short noise burst, beatPos = seconds since the click.
     inline float clickSampleValue (double beatPos, bool accent, Random& rng)
     {
@@ -126,6 +165,26 @@ namespace Metronome
         if (beatPos >= 0 && beatPos < noiseDur)
             sample += (rng.nextDouble() * 2 - 1) * (1 - beatPos / noiseDur) * (accent ? 0.3 : 0.2);
         return (float) sample;
+    }
+
+    // Count-in on the master bus: before `gateEnd` the song is silenced and only `cs` is heard.
+    // `blockStart` is the edit time of buffer sample `start`.
+    inline void renderCountIn (AudioBuffer<float>& buf, int start, int num, double blockStart, double sampleRate,
+                               const std::vector<Click>& cs, double gateEnd, Random& rng)
+    {
+        for (int i = 0; i < num; ++i)
+        {
+            const double t = blockStart + i / sampleRate;
+            if (t >= gateEnd)
+                break;
+
+            float v = 0;
+            for (auto& c : cs)
+                v += clickSampleValue (t - c.time, c.accent, rng);
+
+            for (int ch = 0; ch < buf.getNumChannels(); ++ch)
+                buf.setSample (ch, start + i, v);
+        }
     }
 
     // Mono 16-bit WAV of the clicks, `duration` seconds long.
