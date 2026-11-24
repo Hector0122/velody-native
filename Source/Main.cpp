@@ -9,14 +9,16 @@
 #include "SongMeta.h"
 #include "Exporter.h"
 #include "SongInfo.h"
+#include "SongDelete.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
+static File projectsDir() { return File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("Velody"); }
+
 static File projectFile (const String& name = "Proyecto")
 {
-    auto dir = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("Velody");
-    dir.createDirectory();
-    return dir.getChildFile (File::createLegalFileName (name) + ".tracktionedit");
+    projectsDir().createDirectory();
+    return projectsDir().getChildFile (File::createLegalFileName (name) + ".tracktionedit");
 }
 
 class MainComponent : public Component,
@@ -467,14 +469,56 @@ private:
             m.addItem (i + 1, songs[i].name);
         if (songs.isEmpty())
             m.addItem (-2, "No hay canciones en " + Library::defaultRoot().getFullPathName(), false);
+        if (currentSong.has_value())
+        {
+            m.addSeparator();
+            m.addItem (-3, String (u8"Quitar «") + currentSong->name + String (u8"» de esta laptop…"), importing == nullptr);
+        }
 
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton), [this] (int id)
         {
             if (id == -1)
                 openEdit (projectFile(), nullptr);
+            else if (id == -3)
+                confirmDeleteCurrentSong();
             else if (id > 0)
                 openEdit (projectFile (songs[id - 1].name), &songs.getReference (id - 1));
         });
+    }
+
+    void confirmDeleteCurrentSong()
+    {
+        if (! currentSong.has_value())
+            return;
+
+        const auto plan = SongDelete::plan (currentSong->dir, currentEditFile, SongDelete::takesIn (*edit, projectsDir()));
+        const auto n = plan.takes.size();
+
+        auto opts = MessageBoxOptions().withIconType (MessageBoxIconType::QuestionIcon)
+                                       .withTitle (String (u8"¿Quitar «") + currentSong->name + String (u8"»?"))
+                                       .withMessage (String (u8"Se manda a la papelera: los stems y el análisis de la canción, y su proyecto aquí "
+                                                             u8"(volúmenes, plugins, metrónomo). Puedes recuperarlos desde la papelera.")
+                                                     + (n > 0 ? "\n\nTienes " + String (n) + (n == 1 ? String (u8" grabación") : String (u8" grabaciones")) + " en esta canción." : String()));
+        if (n > 0)
+            opts = opts.withButton ("Quitar y conservar grabaciones", 1).withButton ("Quitar con mis grabaciones", 2).withButton ("Cancelar", 0);
+        else
+            opts = opts.withButton ("Quitar", 1).withButton ("Cancelar", 0);
+
+        AlertWindow::showAsync (opts, [this, plan, n] (int result)
+        {
+            if (result == 0)
+                return;
+            deleteSong (plan, n > 0 && result == 2);
+        });
+    }
+
+    void deleteSong (const SongDelete::Plan& plan, bool includeTakes)
+    {
+        openEdit (projectFile(), nullptr); // close the song first: its files are about to move
+
+        auto r = SongDelete::execute (plan, includeTakes, Library::defaultRoot(), projectsDir());
+        if (r.failed())
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo quitar la canción", r.getErrorMessage());
     }
 
     void stopOrPlay (bool record)
