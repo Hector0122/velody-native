@@ -5,7 +5,8 @@ last-write-wins metadata (409 with the stored version when it isn't newer). "R2"
 same server behind presigned-looking URLs whose query must come back byte for byte.
 
 Prints the port on the first stdout line. Test hooks: POST /_fail?n=N makes the next N API calls
-answer 503; GET /_state dumps the store.
+answer 503; GET /_state dumps the store. Vibes' routes (/v1/velody, /v1/songs/{id}/stream) are here too:
+POST /_vibes?id=&title=&artists=&size= adds a Vibes song already sent to Velody; GET /_vibes lists them.
 """
 import hashlib, json, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,7 @@ SIG = "sig=a%2Fb%3Dc"  # encoded chars: the client must not re-encode the presig
 lock = threading.Lock()
 songs = {}      # id -> {name, files: {name: {size, sha256}}, pending, meta, updatedAt}
 blobs = {}      # (id, name) -> bytes
+vibes = {}      # Vibes' Worker: id -> {title, artists, audio, sent}
 fail_next = [0]
 
 
@@ -47,6 +49,20 @@ class H(BaseHTTPRequestHandler):
         if path == "/_fail":
             fail_next[0] = int(parse_qs(parts.query)["n"][0])
             return self.send(200, {})
+        if path == "/_vibes":
+            if method == "POST":
+                q = {k: v[0] for k, v in parse_qs(parts.query).items()}
+                with lock:
+                    vibes[q["id"]] = {"title": q["title"], "artists": q.get("artists", ""),
+                                      "audio": b"m" * int(q.get("size", "100")), "sent": True}
+                return self.send(200, {})
+            with lock:
+                return self.send(200, {k: {"title": v["title"], "sent": v["sent"]} for k, v in vibes.items()})
+        if path.startswith("/vibes-r2/"):
+            if parts.query != SIG:
+                return self.send(403, {"error": "bad signature"})
+            v = vibes.get(path.split("/")[2])
+            return self.send(200, raw=v["audio"]) if v else self.send(404, {"error": "no blob"})
         if path == "/_state":
             with lock:
                 return self.send(200, {k: {**v, "pending": None} for k, v in songs.items()})
@@ -72,6 +88,17 @@ class H(BaseHTTPRequestHandler):
         segs = path[len("/v1/"):].split("/")
 
         with lock:
+            if segs == ["velody"] and method == "GET":
+                return self.send(200, {"sends": [{"id": k, "title": v["title"], "artists": v["artists"],
+                                                  "durationSec": None, "sentAt": 1}
+                                                 for k, v in sorted(vibes.items()) if v["sent"]]})
+            if len(segs) == 2 and segs[0] == "velody" and method == "DELETE":
+                if segs[1] in vibes:
+                    vibes[segs[1]]["sent"] = False
+                return self.send(200, {"deleted": True})
+            if len(segs) == 3 and segs[0] == "songs" and segs[2] == "stream" and segs[1] in vibes:
+                host = self.headers.get("Host")
+                return self.send(200, {"url": f"http://{host}/vibes-r2/{segs[1]}?{SIG}", "expiresAt": 0})
             if segs == ["health"]:
                 return self.send(200, {"ok": True})
             if segs == ["songs"] and method == "GET":

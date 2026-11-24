@@ -12,6 +12,7 @@
 #include "SongDelete.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
+#include "Vibes.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -64,6 +65,10 @@ public:
         importButton.onClick = [this] { showImportMenu(); };
         imports->onChanged = [this] { importsChanged(); };
         imports->onImported = [this] (const String& name) { songImported (name); };
+        // Songs sent from Vibes: a first look shortly after start, then every 5 minutes.
+        vibesTimer.fn = [this] { checkVibes (false); };
+        vibesTimer.startTimer (5 * 60 * 1000);
+        Timer::callAfterDelay (3000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->checkVibes (false); });
         exportButton.onClick = [this] { showExportMenu(); };
         startButton.setTooltip (String (u8"Ir a donde empieza la música"));
         startButton.onClick = [this] { goToMusicStart(); };
@@ -196,6 +201,8 @@ private:
             {
                 case A::addFiles:      return chooseFilesToImport();
                 case A::addUrl:        return askForUrl();
+                case A::fetchVibes:    return checkVibes (true);
+                case A::vibesSettings: return showVibesSettings();
                 case A::cancel:        imports->cancel (a.job.id); return;
                 case A::clearFinished: imports->clearFinished(); return;
                 case A::showError:
@@ -203,6 +210,50 @@ private:
                     return;
             }
         }).showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
+    }
+
+    Vibes::Poller vibes { *imports, Vibes::settingsFile(), File::getSpecialLocation (File::tempDirectory) };
+    struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer;
+
+    // `manual` ("Traer de Vibes"): says what happened; the automatic checks stay quiet when offline.
+    void checkVibes (bool manual)
+    {
+        if (! manual && ! vibes.active())
+            return;
+        vibes.check ([this, manual] (int added, const String& error)
+        {
+            if (error.isNotEmpty())
+            {
+                if (manual)
+                    AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Vibes", error);
+                return;
+            }
+            if (added > 0)
+                status.setText (added == 1 ? String (u8"1 canción de Vibes en la cola") : String (added) + String (u8" canciones de Vibes en la cola"), dontSendNotification);
+            else if (manual)
+                status.setText ("Nada nuevo desde Vibes", dontSendNotification);
+        });
+    }
+
+    void showVibesSettings()
+    {
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Vibes";
+        o.dialogBackgroundColour = getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        CloudUi::SettingsTexts t;
+        t.intro = String (u8"Las canciones que mandes desde Vibes («Mandar a Velody», en la compu o el celular) se separan aquí solas. "
+                          u8"Usa la misma URL y token que en Vibes.");
+        t.enable = "Traer canciones de Vibes";
+        t.placeholder = "https://vibes.<tu-usuario>.workers.dev";
+        o.content.setOwned (new CloudUi::SettingsPanel (Vibes::settingsFile(),
+                                                        [sp = SafePointer<MainComponent> (this)] (const Cloud::Settings& s)
+                                                        {
+                                                            if (sp != nullptr && s.active())
+                                                                sp->checkVibes (false);
+                                                        }, t));
+        o.launchAsync();
     }
 
     void chooseFilesToImport()

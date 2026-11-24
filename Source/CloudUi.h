@@ -282,19 +282,26 @@ namespace CloudUi
         return m;
     }
 
+    // The panel's wording: the cloud by default; Vibes reuses the panel with its own.
+    struct SettingsTexts
+    {
+        String intro { u8"Guarda una copia de tus canciones en tu propio Cloudflare R2: puedes liberar espacio aquí "
+                       u8"y descargarlas cuando quieras. Sin conexión todo sigue funcionando." };
+        String enable { "Activar la nube" };
+        String placeholder { "https://velody-cloud.<tu-usuario>.workers.dev" };
+    };
+
     // URL + token + on/off, "Probar conexión" and "Guardar". The token is never shown back.
     class SettingsPanel : public Component
     {
     public:
-        SettingsPanel (File settingsFile, std::function<void (const Cloud::Settings&)> saved)
+        SettingsPanel (File settingsFile, std::function<void (const Cloud::Settings&)> saved, SettingsTexts t = SettingsTexts())
             : file (std::move (settingsFile)), onSaved (std::move (saved))
         {
             for (auto* c : std::initializer_list<Component*> { &intro, &urlLabel, &url, &tokenLabel, &token, &enabled, &testButton, &result, &saveButton })
                 addAndMakeVisible (c);
 
-            intro.setText (String (u8"Guarda una copia de tus canciones en tu propio Cloudflare R2: puedes liberar espacio aquí "
-                                   u8"y descargarlas cuando quieras. Sin conexión todo sigue funcionando."),
-                           dontSendNotification);
+            intro.setText (t.intro, dontSendNotification);
             intro.setJustificationType (Justification::topLeft);
             urlLabel.setText ("URL del Worker", dontSendNotification);
             tokenLabel.setText ("Token", dontSendNotification);
@@ -302,10 +309,10 @@ namespace CloudUi
             auto s = Cloud::Settings::load (file);
             current = s;
             url.setText (s.url, false);
-            url.setTextToShowWhenEmpty ("https://velody-cloud.<tu-usuario>.workers.dev", Colours::grey);
+            url.setTextToShowWhenEmpty (t.placeholder, Colours::grey);
             token.setPasswordCharacter ((juce_wchar) 0x2022);
             token.setTextToShowWhenEmpty (s.token.isNotEmpty() ? String (u8"guardado: escribe para cambiarlo") : String ("pega tu token"), Colours::grey);
-            enabled.setButtonText ("Activar la nube");
+            enabled.setButtonText (t.enable);
             enabled.setToggleState (s.enabled, dontSendNotification);
 
             testButton.onClick = [this] { test(); };
@@ -360,7 +367,7 @@ namespace CloudUi
             token.clear();
             token.setTextToShowWhenEmpty (current.token.isNotEmpty() ? String (u8"guardado: escribe para cambiarlo") : String ("pega tu token"), Colours::grey);
             url.setText (current.url, false);
-            showResult (current.enabled ? "Nube activada" : "Guardado", true);
+            showResult (current.enabled ? "Activado" : "Guardado", true);
             if (onSaved)
                 onSaved (current);
         }

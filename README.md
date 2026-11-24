@@ -16,6 +16,7 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 - **Velocidad** (50–150 %) y **Tono** (±12 semitonos): en tiempo real con Signalsmith Stretch (la misma librería que Electron); la velocidad no cambia el tono. El metrónomo y el count-in siguen la velocidad; el tono no afecta el click. Arrancan con `practiceSpeed`/`transposeSemitones` de Electron. Grabar se desactiva mientras no estén en 100 % / 0 st (igual que en Electron).
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
 - **Importar** (cola, como el JobManager de Electron): *Archivos…* (uno o varios: wav/mp3/flac/m4a/ogg), *Desde YouTube…* (pegas el enlace; se descarga con `download.py`/yt-dlp y, si YouTube bloquea una versión vieja de yt-dlp, se actualiza en la venv y se reintenta una vez) o **arrastrando archivos a la ventana**. Cada canción se separa con Demucs (`python-worker/separate.py`, la venv de Electron en `~/.local/share/velody/venv`) y se analiza el tempo, la rejilla y los acordes (`detect_bpm.py`), **una a la vez**. El botón dice *Importar (N)* mientras hay pendientes y el menú muestra la cola: clic en una en espera o en curso la cancela, clic en una fallida muestra el error completo, *Limpiar las terminadas*. Si una falla, la cola sigue. La canción queda en la biblioteca compartida (también aparece en Electron) y se abre sola solo si no tienes otra canción abierta.
+- **Desde Vibes**: en Vibes (compu o celular) cada canción que ya está en su nube tiene **Mandar a Velody**. Velody revisa esa lista al abrir, cada 5 minutos y con *Importar → Traer lo que mandaste desde Vibes*; baja el audio (`.m4a` del R2 de Vibes), lo mete a la cola como «Artista - Título» y, ya separada y analizada, la quita de la lista de Vibes. Si falla se queda en Vibes para reintentarla (después de *Limpiar las terminadas*). Se configura en *Importar → Vibes…* con la misma URL y token que usa Vibes (`~/.config/Velody/vibes.settings`, 0600).
 - **Exportar**: mezcla o cada pista por separado, en WAV o MP3 (MP3 con ffmpeg). Se exporta **lo que escuchas**: volumen, pan, mute/solo, plugins y velocidad/tono; el metrónomo solo si su pista no está en mute. (Electron exportaba siempre a velocidad normal.)
 - **Quitar una canción**: en **Canciones**, con la canción abierta, *Quitar «…»…*. Manda a la **papelera** la carpeta de la canción (stems + `.velody`) y su proyecto (y, si eliges, tus grabaciones). Si la canción también está en la nube, pregunta: *Quitar de esta laptop* (sube antes lo que falte, libera espacio, conserva tu proyecto aquí) o *Borrar en todas partes* (primero la nube; si eso falla no se borra nada local).
 - **Nube** (*Canciones → Nube…*): copia de la biblioteca en tu Cloudflare R2 con el mismo Worker que Electron (`velody/cloud-worker`), así que las dos apps ven la misma nube. Pones la URL del Worker y el token (se guarda en `~/.config/Velody/cloud.settings` con permisos 0600 y no se vuelve a mostrar; hay que volver a pegarlo, porque Electron lo guarda cifrado), *Probar conexión*, *Activar*. En el menú **Canciones**: ✓ = aquí y en la nube, ☁ = solo en la nube (se descarga completa y verificada al abrirla); al abrir una ✓ se trae el análisis más nuevo (gana la última escritura). *Subir «…» a la nube*, *Subir a la nube las N canciones que solo están aquí* (solo sube lo que cambió) y *Borrar de la nube* (canciones que solo están allá). Sin conexión todo sigue funcionando con lo local; el menú avisa. Las transferencias van en segundo plano con progreso en la barra de estado.
@@ -51,7 +52,7 @@ La primera compilación tarda varios minutos (compila JUCE y Tracktion completos
 cmake --build build && ctest --test-dir build --output-on-failure
 ```
 
-Las pruebas de la nube levantan un Worker falso (`Tests/fake_cloud.py`, necesita `python3`): nunca tocan tu nube real.
+Las pruebas de la nube y de Vibes levantan un Worker falso (`Tests/fake_cloud.py`, necesita `python3`, con las rutas de los dos Workers): nunca tocan tu nube real.
 
 Prueba real de separación (opcional, tarda): `VELODY_E2E_SEPARATE=/ruta/a/cancion.wav ./build/VelodyTests_artefacts/Release/VelodyTests`. Los stems van a una carpeta temporal, no a la biblioteca.
 
@@ -85,7 +86,8 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/ImportQueue.h` — cola de importación (descargar → separar → analizar, uno a la vez, cancelable) y el menú *Importar*.
 - `Source/CloudClient.h` — cliente HTTP del Worker de la nube y ajustes (port de `cloud/client.ts`).
 - `Source/CloudSync.h` — sincronización: lista combinada, subir, descargar, metadatos, quitar/borrar (port de `cloud/sync.ts`).
-- `Source/CloudUi.h` — menú *Canciones* con estados de la nube, hilo de transferencias y ventana *Nube…*.
+- `Source/CloudUi.h` — menú *Canciones* con estados de la nube, hilo de transferencias y ventana *Nube…* (también la usa *Vibes…*).
+- `Source/Vibes.h` — Vibes → Velody: lista de canciones mandadas desde Vibes, descarga a la cola y quitarlas de la lista.
 - `python-worker/` — copia de los scripts de Python de Electron (Demucs, BPM, acordes).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
@@ -106,7 +108,7 @@ Inventario del 2026-11-24 (comparando `velody/src` contra este repo). Orden acor
 1. ~~Inicio de la música y acordes~~ — hecho.
 2. ~~Quitar canciones~~ — hecho.
 3. ~~Sincronización con la nube~~ — hecho en v0.1.0 (falta probarla a mano contra la nube real).
-4. **Vibes → Velody**: desde Vibes (`~/Developer/vibes`, tiene su propio Worker con R2 + D1) mandar canciones a Velody; Velody baja el MP3 de R2 y lo mete a la cola de importación. Toca los dos repos; falta diseñar dónde vive la cola de "por importar" (D1 de Vibes o el Worker de Velody).
+4. ~~Vibes → Velody~~ — hecho: la lista vive en el Worker de Vibes (tabla `velody_sends`, `GET/PUT/DELETE /v1/velody`), botón *Mandar a Velody* en Vibes compu y celular. **Falta aplicar la migración `0008_velody.sql` y desplegar el Worker de Vibes**, y probarlo a mano de punta a punta.
 5. **Instalación inicial**: crear la venv (`~/.local/share/velody/venv`) con Demucs/PyTorch (CUDA si hay) y Beat This!, y ffmpeg, con pantalla de progreso (port de `main/setup/index.ts` + `SetupScreen.tsx`). Hoy se usa lo que dejó Electron: **imprescindible antes de desinstalarlo**.
 
 Otros faltantes, por prioridad:

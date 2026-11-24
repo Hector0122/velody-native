@@ -211,6 +211,27 @@ namespace Cloud
 
         int transferTimeoutMs = 120000; // one stem is a few MB
 
+        // One JSON call to the Worker under /v1 (errors as Cloud::Error). Also used for Vibes' Worker.
+        var api (const String& method, const String& path, const var& body = {})
+        {
+            String headers = "Authorization: Bearer " + token;
+            MemoryBlock data;
+            if (! body.isVoid())
+            {
+                headers << "\r\nContent-Type: application/json";
+                auto json = JSON::toString (body, true);
+                data.append (json.toRawUTF8(), json.getNumBytesAsUTF8());
+            }
+
+            auto r = send (method, base + path, body.isVoid() ? nullptr : &data, headers, timeoutMs);
+            auto parsed = JSON::parse (r.body.toString());
+            if (r.status < 200 || r.status >= 300)
+                throw Error (r.status == 401 ? String (u8"Token de la nube inválido")
+                                             : parsed["error"].isString() ? parsed["error"].toString() : "Error de la nube " + String (r.status),
+                             r.status, parsed);
+            return parsed;
+        }
+
     private:
         String base, token;
         int timeoutMs, retries, retryDelayMs;
@@ -252,26 +273,6 @@ namespace Cloud
             if (last.status == 0)
                 throw Error ("No se pudo conectar con la nube", 0);
             return last;
-        }
-
-        var api (const String& method, const String& path, const var& body = {})
-        {
-            String headers = "Authorization: Bearer " + token;
-            MemoryBlock data;
-            if (! body.isVoid())
-            {
-                headers << "\r\nContent-Type: application/json";
-                auto json = JSON::toString (body, true);
-                data.append (json.toRawUTF8(), json.getNumBytesAsUTF8());
-            }
-
-            auto r = send (method, base + path, body.isVoid() ? nullptr : &data, headers, timeoutMs);
-            auto parsed = JSON::parse (r.body.toString());
-            if (r.status < 200 || r.status >= 300)
-                throw Error (r.status == 401 ? String (u8"Token de la nube inválido")
-                                             : parsed["error"].isString() ? parsed["error"].toString() : "Error de la nube " + String (r.status),
-                             r.status, parsed);
-            return parsed;
         }
 
         static FileInfo parseFile (const var& f) { return { f["name"].toString(), (int64) f["size"], f["sha256"].toString() }; }

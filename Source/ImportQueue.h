@@ -31,6 +31,12 @@ namespace Import
         String stage;  // "Descargando", "Separando", "Analizando"
         String error;
 
+        // A job from elsewhere (Vibes): `key` identifies it, `fetch` brings the audio into a
+        // velody_dl_* temp folder (outcome.path), `afterImport` runs once it's in the library.
+        String key;
+        std::function<PythonWorker::Outcome (std::function<void (int)>, std::function<bool()>)> fetch;
+        std::function<void()> afterImport;
+
         bool finished() const { return status == Status::done || status == Status::failed || status == Status::cancelled; }
     };
 
@@ -88,6 +94,23 @@ namespace Import
 
         int addFile (const File& f) { return add ({ 0, f, {}, f.getFileNameWithoutExtension() }); }
         int addUrl (const String& url) { return add ({ 0, {}, url.trim(), url.trim() }); }
+
+        int addRemote (const String& key, const String& name, decltype (Job::fetch) fetch, std::function<void()> afterImport)
+        {
+            Job j { 0, {}, {}, name };
+            j.key = key;
+            j.fetch = std::move (fetch);
+            j.afterImport = std::move (afterImport);
+            return add (j);
+        }
+
+        // Any job (finished too) with this key: so a song from Vibes isn't queued twice, nor
+        // retried every few minutes after it failed (until the finished jobs are cleared).
+        bool has (const String& key) const
+        {
+            const ScopedLock sl (lock);
+            return std::any_of (jobs.begin(), jobs.end(), [&] (auto& j) { return j.key == key; });
+        }
 
         // A queued job is dropped right away; the running one is stopped and marked cancelled.
         bool cancel (int id)
@@ -232,7 +255,17 @@ namespace Import
             PythonWorker::Outcome outcome;
             outcome.ok = true;
 
-            if (job.url.isNotEmpty())
+            if (job.fetch)
+            {
+                stage ("Descargando");
+                outcome = job.fetch (percent, stop);
+                if (outcome.ok)
+                {
+                    audio = File (outcome.path);
+                    downloadDir = audio.getParentDirectory();
+                }
+            }
+            else if (job.url.isNotEmpty())
             {
                 stage ("Descargando");
                 outcome = steps.download (job.url,
@@ -281,7 +314,11 @@ namespace Import
                 j.progress = outcome.ok ? 100 : j.progress;
             });
             if (outcome.ok && ! cancelled)
+            {
+                if (job.afterImport)
+                    job.afterImport();
                 post ([this, name] { if (onImported) onImported (name); });
+            }
         }
     };
 
@@ -300,7 +337,7 @@ namespace Import
 
     struct MenuAction
     {
-        enum Kind { addFiles, addUrl, cancel, showError, clearFinished } kind;
+        enum Kind { addFiles, addUrl, fetchVibes, vibesSettings, cancel, showError, clearFinished } kind;
         Job job {};
     };
 
@@ -311,6 +348,8 @@ namespace Import
         PopupMenu m;
         m.addItem (String (u8"Archivos…"), [act] { act ({ MenuAction::addFiles }); });
         m.addItem (String (u8"Desde YouTube…"), [act] { act ({ MenuAction::addUrl }); });
+        m.addItem ("Traer lo que mandaste desde Vibes", [act] { act ({ MenuAction::fetchVibes }); });
+        m.addItem (String (u8"Vibes…"), [act] { act ({ MenuAction::vibesSettings }); });
         if (jobs.empty())
             return m;
 
