@@ -128,6 +128,17 @@ namespace SongEdit
         }
     }
 
+    // End of the last clip, from the clips themselves: Edit::getLength() is updated asynchronously,
+    // so right after a speed change it still reports the old length.
+    inline double contentLength (te::Edit& edit)
+    {
+        double end = 0;
+        for (auto t : te::getAudioTracks (edit))
+            for (auto c : t->getClips())
+                end = jmax (end, c->getPosition().getEnd().inSeconds());
+        return end;
+    }
+
     // Input tracks go after the leading song tracks so a stem is never recorded over.
     inline int firstInputTrack (te::Edit& edit)
     {

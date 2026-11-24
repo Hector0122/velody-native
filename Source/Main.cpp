@@ -7,6 +7,7 @@
 #include "CountInPlugin.h"
 #include "PythonWorker.h"
 #include "SongMeta.h"
+#include "Exporter.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -23,7 +24,7 @@ class MainComponent : public Component,
 public:
     MainComponent()
     {
-        Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &audioButton, &pluginsButton, &playButton, &recordButton,
+        Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton,
                                              &newTrackButton, &deleteButton, &folderButton, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
@@ -55,6 +56,7 @@ public:
 
         songsButton.onClick = [this] { showSongsMenu(); };
         importButton.onClick = [this] { if (importing != nullptr) importing->signalThreadShouldExit(); else showImportMenu(); };
+        exportButton.onClick = [this] { showExportMenu(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
@@ -73,6 +75,7 @@ public:
 
     ~MainComponent() override
     {
+        exporter = nullptr;
         importing = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         save();
@@ -88,8 +91,8 @@ public:
     {
         auto r = getLocalBounds();
         auto top = r.removeFromTop (34);
-        const int w = 100;
-        for (auto* b : { &songsButton, &importButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
+        const int w = 92;
+        for (auto* b : { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
         auto row = r.removeFromTop (30);
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
@@ -110,7 +113,7 @@ private:
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<EditComponent> editComponent;
 
-    TextButton songsButton { "Canciones" }, importButton { "Importar" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
+    TextButton songsButton { "Canciones" }, importButton { "Importar" }, exportButton { "Exportar" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
@@ -294,11 +297,90 @@ private:
                 return openEdit (projectFile (song.name), &song);
     }
 
+    std::unique_ptr<Exporter> exporter;
+
+    String songTitle() const { return currentSong.has_value() ? currentSong->name : currentEditFile.getFileNameWithoutExtension(); }
+
+    void showExportMenu()
+    {
+        PopupMenu m;
+        m.addSectionHeader ("Se exporta lo que escuchas (volumen, mute, velocidad, metrónomo si no está en mute)");
+        m.addItem ("Mezcla (WAV)", [this] { chooseMixFile (Exporter::Format::wav); });
+        m.addItem ("Mezcla (MP3)", [this] { chooseMixFile (Exporter::Format::mp3); });
+        m.addItem ("Cada pista por separado (WAV)", [this] { chooseStemsFolder (Exporter::Format::wav); });
+        m.addItem ("Cada pista por separado (MP3)", [this] { chooseStemsFolder (Exporter::Format::mp3); });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (exportButton));
+    }
+
+    static String ext (Exporter::Format f) { return f == Exporter::Format::mp3 ? ".mp3" : ".wav"; }
+
+    void chooseMixFile (Exporter::Format f)
+    {
+        auto suggested = File::getSpecialLocation (File::userMusicDirectory).getChildFile (File::createLegalFileName (songTitle()) + ext (f));
+        chooser = std::make_unique<FileChooser> ("Guardar mezcla", suggested, "*" + ext (f));
+        chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
+                              [this, f] (const FileChooser& fc)
+        {
+            if (auto out = fc.getResult(); out != File())
+            {
+                Array<Exporter::Item> items;
+                items.add ({ {}, out.withFileExtension (ext (f)) }); // empty track set = the whole mix
+                startExport (items, f);
+            }
+        });
+    }
+
+    void chooseStemsFolder (Exporter::Format f)
+    {
+        chooser = std::make_unique<FileChooser> ("Carpeta para las pistas", File::getSpecialLocation (File::userMusicDirectory));
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectDirectories, [this, f] (const FileChooser& fc)
+        {
+            auto dir = fc.getResult();
+            if (! dir.isDirectory())
+                return;
+
+            Array<Exporter::Item> items;
+            for (auto t : Exporter::exportableTracks (*edit))
+                items.add (Exporter::stemItem (*edit, *t, dir.getChildFile (File::createLegalFileName (songTitle() + " - " + t->getName()) + ext (f))));
+            startExport (items, f);
+        });
+    }
+
+    void startExport (Array<Exporter::Item> items, Exporter::Format f)
+    {
+        if (items.isEmpty())
+            return;
+
+        edit->getTransport().stop (false, false);
+        exportButton.setEnabled (false);
+        const auto first = items.getFirst().out;
+        exporter = std::make_unique<Exporter> (*edit, items, f,
+            [this] (int done, int total) { status.setText ("Exportando " + String (done + 1) + " de " + String (total) + "…", dontSendNotification); },
+            [this, first] (const String& error)
+            {
+                // Destroy the exporter after its callback has returned.
+                MessageManager::callAsync ([sp = Component::SafePointer<MainComponent> (this), error, first]
+                {
+                    if (sp == nullptr) return;
+                    sp->exporter = nullptr;
+                    sp->exportButton.setEnabled (true);
+                    sp->refreshButtons();
+                    if (error.isNotEmpty())
+                        AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo exportar", error);
+                    else
+                        first.revealToUser();
+                });
+            });
+        exporter->start();
+    }
+
     void save() { te::EditFileOperations (*edit).save (true, true, false); }
 
     // A new song edit gets one track per stem; reopening keeps the user's edit (mutes, plugins, takes).
     void openEdit (const File& f, const Library::Song* song)
     {
+        exporter = nullptr; // cancels a render of the edit we're about to close
+        exportButton.setEnabled (true);
         if (edit != nullptr)
         {
             edit->getTransport().stop (false, false);
@@ -457,7 +539,7 @@ private:
 
         auto& v = editComponent->getEditViewState();
         v.viewX1 = te::TimePosition();
-        v.viewX2 = te::TimePosition::fromSeconds (jmax (60.0, edit->getLength().inSeconds() * 1.02));
+        v.viewX2 = te::TimePosition::fromSeconds (jmax (60.0, SongEdit::contentLength (*edit) * 1.02));
     }
 
     // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed (not monitored),
@@ -526,7 +608,7 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        if (importing == nullptr) // while importing, the status shows the progress instead
+        if (importing == nullptr && exporter == nullptr) // while importing/exporting, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
                                            : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "

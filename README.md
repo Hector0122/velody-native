@@ -18,6 +18,7 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 - **Velocidad** (50–150 %) y **Tono** (±12 semitonos): en tiempo real con Signalsmith Stretch (la misma librería que Electron); la velocidad no cambia el tono. El metrónomo y el count-in siguen la velocidad; el tono no afecta el click. Arrancan con `practiceSpeed`/`transposeSemitones` de Electron. Grabar se desactiva mientras no estén en 100 % / 0 st (igual que en Electron).
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
 - **Importar**: *Archivo…* (wav/mp3/flac/m4a/ogg) o *Desde YouTube…* (pegas el enlace; se descarga con `download.py`/yt-dlp y, si YouTube bloquea una versión vieja de yt-dlp, se actualiza en la venv y se reintenta una vez). Luego se separa con Demucs (`python-worker/separate.py`, la venv de Electron en `~/.local/share/velody/venv`) y se analiza el tempo, la rejilla y los acordes (`detect_bpm.py`). La canción queda en la biblioteca compartida, así que también aparece en Electron, y se abre sola al terminar. Mientras corre, el botón dice **Cancelar**.
+- **Exportar**: mezcla o cada pista por separado, en WAV o MP3 (MP3 con ffmpeg). Se exporta **lo que escuchas**: volumen, pan, mute/solo, plugins y velocidad/tono; el metrónomo solo si su pista no está en mute. (Electron exportaba siempre a velocidad normal.)
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
 - Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada, con el monitoreo apagado (se prende en **I → Input Monitoring**; con bocinas causa retroalimentación).
@@ -76,6 +77,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/CountInPlugin.h` — plugin del bus master que silencia la canción y toca el count-in.
 - `Source/PythonWorker.h` — lanza los scripts de Python y lee su JSON (con SIGTERM para cancelar).
 - `Source/SongMeta.h` — escribe el `.velody` igual que `updateMeta` de Electron.
+- `Source/Exporter.h` — render offline de la mezcla o de cada pista.
 - `python-worker/` — copia de los scripts de Python de Electron (Demucs, BPM, acordes).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
