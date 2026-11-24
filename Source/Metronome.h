@@ -9,6 +9,8 @@ namespace Metronome
 
     inline int mod (int n, int m) { return ((n % m) + m) % m; }
 
+    struct Chord { double time; String chord; };
+
     // The analysis fields of a song's .velody sidecar.
     struct SongMeta
     {
@@ -18,6 +20,7 @@ namespace Metronome
         int countInBars = 0;   // playbackCountInBars
         double practiceSpeed = 1;  // 0.5–1.5 in 0.05 steps
         int transposeSemitones = 0; // −12…+12
+        std::vector<Chord> chords;  // changes in song time, sorted ("N" = no chord)
     };
 
     // Same clamps as Electron's pitchShifter.ts.
@@ -45,6 +48,12 @@ namespace Metronome
         m.countInBars = jlimit (0, 8, (int) json["playbackCountInBars"]);
         if (json.hasProperty ("practiceSpeed"))      m.practiceSpeed = clampSpeed (json["practiceSpeed"]);
         if (json.hasProperty ("transposeSemitones")) m.transposeSemitones = clampSemitones (json["transposeSemitones"]);
+
+        if (auto* cs = json["chords"].getArray())
+            for (auto& c : *cs)
+                if ((c["time"].isDouble() || c["time"].isInt()) && c["chord"].isString())
+                    m.chords.push_back ({ (double) c["time"], c["chord"].toString() });
+        std::sort (m.chords.begin(), m.chords.end(), [] (auto& a, auto& b) { return a.time < b.time; });
 
         auto shift = json["downbeatShift"].isVoid() || json["downbeatShift"].isUndefined()
                        ? json["detectedDownbeatShift"] : json["downbeatShift"];

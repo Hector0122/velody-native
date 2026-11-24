@@ -8,6 +8,7 @@
 #include "PythonWorker.h"
 #include "SongMeta.h"
 #include "Exporter.h"
+#include "SongInfo.h"
 
 // Project files live in ~/Documents/Velody and recordings land next to them as WAV,
 // so the Electron library is only ever read, never written.
@@ -25,7 +26,7 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &chordDisplay, &countInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
                                              &status, &mixer });
 
         speedLabel.setText ("Velocidad", dontSendNotification);
@@ -42,10 +43,10 @@ public:
             sl->onValueChange = [this] { applyPractice(); };
         }
 
-        countInBox.addItemList ({ "Sin count-in", "Count-in 1 compás", "Count-in 2 compases" }, 1);
+        countInBox.addItemList (StringArray (String ("Sin count-in"), String (u8"Count-in 1 compás"), String ("Count-in 2 compases")), 1);
 
         soundBox.addItemList (Metronome::soundNames, 1);
-        soundBox.setTooltip ("Sonido del metrónomo y del count-in");
+        soundBox.setTooltip (String (u8"Sonido del metrónomo y del count-in"));
         soundBox.setSelectedItemIndex (settings.getIntValue ("clickSound", 0), dontSendNotification);
         soundBox.onChange = [this]
         {
@@ -57,6 +58,9 @@ public:
         songsButton.onClick = [this] { showSongsMenu(); };
         importButton.onClick = [this] { if (importing != nullptr) importing->signalThreadShouldExit(); else showImportMenu(); };
         exportButton.onClick = [this] { showExportMenu(); };
+        startButton.setTooltip (String (u8"Ir a donde empieza la música"));
+        startButton.onClick = [this] { goToMusicStart(); };
+        chordDisplay.songTime = [this] { return edit != nullptr ? edit->getTransport().getPosition().inSeconds() * speed() : 0.0; };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
@@ -95,12 +99,14 @@ public:
         for (auto* b : { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
         auto row = r.removeFromTop (30);
+        startButton.setBounds (row.removeFromLeft (70).reduced (2));
         countInBox.setBounds (row.removeFromLeft (180).reduced (2));
         soundBox.setBounds (row.removeFromLeft (120).reduced (2));
         speedLabel.setBounds (row.removeFromLeft (70));
         speedSlider.setBounds (row.removeFromLeft (260));
         pitchLabel.setBounds (row.removeFromLeft (40));
         pitchSlider.setBounds (row.removeFromLeft (260));
+        chordDisplay.setBounds (row.reduced (8, 1));
         status.setBounds (top.reduced (4, 0));
         mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
         if (editComponent != nullptr)
@@ -118,6 +124,13 @@ private:
                folderButton { "Carpeta" };
     Label status;
     ComboBox countInBox, soundBox;
+    TextButton startButton { String (u8"⏮ Inicio") };
+    SongInfo::ChordDisplay chordDisplay;
+    double musicStart = 0; // song time where the first sound is
+
+    static inline const Identifier musicStartProp { "velodyMusicStart" }; // cached: decoding stems takes a moment
+
+    void goToMusicStart() { edit->getTransport().setPosition (te::TimePosition::fromSeconds (musicStart / speed())); }
     std::optional<Library::Song> currentSong;
     File currentEditFile;
 
@@ -175,10 +188,10 @@ private:
 
             if (url.isNotEmpty())
             {
-                status ("Descargando…");
+                status (String (u8"Descargando…"));
                 auto dl = PythonWorker::download (PythonWorker::downloadArgs (url), PythonWorker::updateYtDlpArgs(),
-                                                  [this] (const String& title, int pct) { status ("Descargando " + title + "…  " + String (pct) + " %"); },
-                                                  [this] { status ("YouTube bloqueó la descarga; actualizando yt-dlp…"); }, stop);
+                                                  [this] (const String& title, int pct) { status ("Descargando " + title + String (u8"…  ") + String (pct) + " %"); },
+                                                  [this] { status (String (u8"YouTube bloqueó la descarga; actualizando yt-dlp…")); }, stop);
                 if (! dl.ok)
                     return finish (dl, url);
 
@@ -187,9 +200,9 @@ private:
             }
 
             const auto name = audio.getFileNameWithoutExtension();
-            status ("Separando " + name + "…");
+            status ("Separando " + name + String (u8"…"));
             auto outcome = PythonWorker::run (PythonWorker::separateArgs (audio, Library::defaultRoot()),
-                                              [this, name] (int pct) { status ("Separando " + name + "…  " + String (pct) + " %"); }, stop);
+                                              [this, name] (int pct) { status ("Separando " + name + String (u8"…  ") + String (pct) + " %"); }, stop);
             if (outcome.ok && ! threadShouldExit())
                 analyse (name);
 
@@ -203,7 +216,7 @@ private:
         // song has a metronome and count-in. A failed detection isn't saved (it can be retried).
         void analyse (const String& name)
         {
-            status ("Analizando tempo y acordes…");
+            status (String (u8"Analizando tempo y acordes…"));
             for (auto& song : Library::scan (Library::defaultRoot()))
                 if (song.name == name)
                     if (auto stem = SongMeta::pickBeatTrackingStem (song.stems); stem.existsAsFile())
@@ -238,14 +251,14 @@ private:
     void showImportMenu()
     {
         PopupMenu m;
-        m.addItem ("Archivo…", [this] { chooseFileToImport(); });
-        m.addItem ("Desde YouTube…", [this] { askForUrl(); });
+        m.addItem (String (u8"Archivo…"), [this] { chooseFileToImport(); });
+        m.addItem (String (u8"Desde YouTube…"), [this] { askForUrl(); });
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
     }
 
     void chooseFileToImport()
     {
-        chooser = std::make_unique<FileChooser> ("Canción para separar", File::getSpecialLocation (File::userMusicDirectory),
+        chooser = std::make_unique<FileChooser> (String (u8"Canción para separar"), File::getSpecialLocation (File::userMusicDirectory),
                                                  "*.wav;*.mp3;*.flac;*.m4a;*.ogg");
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc)
         {
@@ -273,7 +286,7 @@ private:
             if (PythonWorker::isDownloadableUrl (url))
                 startImport ({}, url);
             else
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Enlace no válido", "Pega un enlace que empiece con https://");
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, String (u8"Enlace no válido"), "Pega un enlace que empiece con https://");
         }), false);
     }
 
@@ -304,7 +317,7 @@ private:
     void showExportMenu()
     {
         PopupMenu m;
-        m.addSectionHeader ("Se exporta lo que escuchas (volumen, mute, velocidad, metrónomo si no está en mute)");
+        m.addSectionHeader (String (u8"Se exporta lo que escuchas (volumen, mute, velocidad, metrónomo si no está en mute)"));
         m.addItem ("Mezcla (WAV)", [this] { chooseMixFile (Exporter::Format::wav); });
         m.addItem ("Mezcla (MP3)", [this] { chooseMixFile (Exporter::Format::mp3); });
         m.addItem ("Cada pista por separado (WAV)", [this] { chooseStemsFolder (Exporter::Format::wav); });
@@ -355,7 +368,7 @@ private:
         exportButton.setEnabled (false);
         const auto first = items.getFirst().out;
         exporter = std::make_unique<Exporter> (*edit, items, f,
-            [this] (int done, int total) { status.setText ("Exportando " + String (done + 1) + " de " + String (total) + "…", dontSendNotification); },
+            [this] (int done, int total) { status.setText ("Exportando " + String (done + 1) + " de " + String (total) + String (u8"…"), dontSendNotification); },
             [this, first] (const String& error)
             {
                 // Destroy the exporter after its callback has returned.
@@ -414,6 +427,19 @@ private:
         refreshClickTrack(); // also applies the speed/pitch to the new click clip
         applyPractice();
 
+        // Like Electron: start where the music starts (leading silence skipped) unless the cursor was moved.
+        musicStart = 0;
+        if (song != nullptr)
+        {
+            if (! edit->state.hasProperty (musicStartProp))
+                edit->state.setProperty (musicStartProp, SongInfo::findMusicStart (song->stems, engine.getAudioFileFormatManager().readFormatManager), nullptr);
+            musicStart = edit->state[musicStartProp];
+            if (edit->getTransport().getPosition() == te::TimePosition())
+                goToMusicStart();
+        }
+        startButton.setEnabled (song != nullptr);
+        chordDisplay.setChords (songMeta.chords);
+
         edit->playInStopEnabled = true;
         edit->getTransport().addChangeListener (this);
 
@@ -435,7 +461,7 @@ private:
         songs = Library::scan (Library::defaultRoot());
 
         PopupMenu m;
-        m.addItem (-1, "Proyecto vacío");
+        m.addItem (-1, String (u8"Proyecto vacío"));
         m.addSeparator();
         for (int i = 0; i < songs.size(); ++i)
             m.addItem (i + 1, songs[i].name);

@@ -12,6 +12,8 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 
 - **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documentos/Velody/<canción>.tracktionedit`.
 - **Metrónomo**: al abrir una canción ya analizada (con BPM en su `.velody`) se agrega una pista *Metrónomo* después de los stems, con los mismos clicks y acentos que el metrónomo de Electron (rejilla de beats, "el 1" manual o detectado). Se regenera cada vez que abres la canción; mute/volumen como cualquier pista.
+- **Inicio de la música**: al abrir una canción el cursor se coloca donde empieza a sonar (se salta el silencio inicial, como en Electron); **⏮ Inicio** regresa ahí.
+- **Acordes**: a la derecha de la segunda fila, grande, el acorde que suena → el siguiente (del análisis del `.velody`; siguen la velocidad).
 - **Count-in** (selector arriba): 1 o 2 compases de clicks sobre la rejilla de la canción antes de que entre, desde donde esté el cursor. Arranca con el valor de Electron (`playbackCountInBars`) y tu cambio se guarda en el proyecto de la canción.
 - **Sonido del metrónomo** (selector junto al count-in): Woodblock, Beep, Clave o Cencerro. Se guarda para todas las canciones (`~/.config/Velody/Velody.settings`) y también lo usa el count-in.
 - La línea de tiempo muestra la canción completa (se reajusta al cambiar la velocidad).
@@ -77,6 +79,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/CountInPlugin.h` — plugin del bus master que silencia la canción y toca el count-in.
 - `Source/PythonWorker.h` — lanza los scripts de Python y lee su JSON (con SIGTERM para cancelar).
 - `Source/SongMeta.h` — escribe el `.velody` igual que `updateMeta` de Electron.
+- `Source/SongInfo.h` — inicio de la música y acordes (port de `utils.ts`).
 - `Source/Exporter.h` — render offline de la mezcla o de cada pista.
 - `python-worker/` — copia de los scripts de Python de Electron (Demucs, BPM, acordes).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).

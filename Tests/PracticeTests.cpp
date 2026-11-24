@@ -15,7 +15,7 @@ struct PracticeTests : UnitTest
     {
         using namespace Metronome;
 
-        beginTest ("clamps match Electron (0.5–1.5 in 0.05 steps, ±12 semitones)");
+        beginTest (String (u8"clamps match Electron (0.5–1.5 in 0.05 steps, ±12 semitones)"));
         expectEquals (clampSpeed (0.8), 0.8);
         expectEquals (clampSpeed (0.81), 0.8);
         expectEquals (clampSpeed (3), 1.5);
@@ -42,7 +42,7 @@ struct PracticeTests : UnitTest
         SongEdit::setClickTrack (*edit, dir.getChildFile ("vocals.wav")); // any audio will do as the click here
         edit->ensureNumberOfAudioTracks (3);
         auto input = te::getAudioTracks (*edit)[2];
-        input->setName ("Grabación");
+        input->setName (String (u8"Grabación"));
         SongEdit::insertWholeFile (*input, dir.getChildFile ("take.wav"));
 
         auto clipOf = [&] (int track) { return dynamic_cast<te::WaveAudioClip*> (te::getAudioTracks (*edit)[track]->getClips()[0]); };

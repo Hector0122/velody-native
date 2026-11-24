@@ -7,7 +7,10 @@ namespace te = tracktion;
 
 namespace SongEdit
 {
-    inline const String clickTrackName { "Metrónomo" };
+    inline const String clickTrackName { String (u8"Metrónomo") };
+    // Before the UTF-8 fix the name was built from a plain char literal, which JUCE reads as Latin-1;
+    // edits saved back then hold this form, so it's recognised and renamed on open.
+    inline const String legacyClickTrackName { CharPointer_ASCII ("Metr\xc3\xb3nomo") };
 
     // Opens `file` (or creates it empty) with a path resolver that matches how Tracktion writes
     // relative paths: getRelativePathFrom (editFile) gives "../x.wav" for a file beside the edit, but
@@ -86,6 +89,7 @@ namespace SongEdit
         te::AudioTrack* lastStem = nullptr;
         for (auto t : tracks)
         {
+            if (t->getName() == legacyClickTrackName) t->setName (clickTrackName);
             if (t->getName() == clickTrackName) click = t;
             else if (Library::isStemName (t->getName())) lastStem = t;
         }

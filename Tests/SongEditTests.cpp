@@ -87,6 +87,30 @@ struct ClickTrackTests : UnitTest
         expectEquals (te::getAudioTracks (*edit).size(), 4);
         expectEquals (te::getAudioTracks (*edit)[2]->getClips().size(), 1);
 
+        beginTest ("the track name is real UTF-8 (not Latin-1 mojibake)");
+        expectEquals (SongEdit::clickTrackName, String::fromUTF8 ("Metr\xc3\xb3nomo"));
+        expect (SongEdit::clickTrackName.length() == 9);
+
+        beginTest ("an edit saved with the old garbled name is renamed, not duplicated");
+        auto legacyFile = dir.getChildFile ("legacy.tracktionedit");
+        {
+            auto old = SongEdit::openOrCreate (engine, legacyFile);
+            SongEdit::addStemTracks (*old, song.stems);
+            SongEdit::setClickTrack (*old, wav);
+            te::getAudioTracks (*old)[2]->setName (SongEdit::legacyClickTrackName); // as saved before the fix
+            te::EditFileOperations (*old).save (true, true, false);
+        }
+        auto reopened = SongEdit::openOrCreate (engine, legacyFile);
+        SongEdit::setClickTrack (*reopened, wav);
+        auto rt = te::getAudioTracks (*reopened);
+        int clicks = 0;
+        for (auto t : rt)
+            if (t->getName() == SongEdit::clickTrackName || t->getName() == SongEdit::legacyClickTrackName) ++clicks;
+        expectEquals (clicks, 1);
+        expectEquals (rt[2]->getName(), SongEdit::clickTrackName);
+        expectEquals (SongEdit::firstInputTrack (*reopened), rt.size()); // never armed for recording
+        reopened = nullptr;
+
         edit = nullptr;
         dir.deleteRecursively();
     }

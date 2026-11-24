@@ -249,10 +249,10 @@ namespace PythonWorker
         else if (ran.stopped)
         {
             o.cancelled = ! ran.timedOut;
-            o.error = ran.timedOut ? "Tardó demasiado (límite de 10 min)" : "Cancelado";
+            o.error = ran.timedOut ? String (u8"Tardó demasiado (límite de 10 min)") : String ("Cancelado");
         }
         else if (o.error.isEmpty() && (ran.code != 0 || ! complete))
-            o.error = "El proceso de Python terminó con código " + String (ran.code);
+            o.error = String (u8"El proceso de Python terminó con código ") + String (ran.code);
 
         o.ok = o.error.isEmpty();
         return o;
@@ -289,7 +289,7 @@ namespace PythonWorker
             if (o.ok && ! File::isAbsolutePath (o.path))
             {
                 o.ok = false;
-                o.error = "La descarga terminó sin archivo de audio";
+                o.error = String (u8"La descarga terminó sin archivo de audio");
             }
             return o;
         };
