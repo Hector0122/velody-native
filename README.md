@@ -105,7 +105,7 @@ Inventario del 2026-11-24 (comparando `velody/src` contra este repo). Orden acor
 
 1. ~~Inicio de la música y acordes~~ — hecho.
 2. ~~Quitar canciones~~ — hecho.
-3. ~~Sincronización con la nube~~ — hecho (rama `sincronizacion-nube`, falta probarla a mano contra la nube real y mezclar a `main`).
+3. ~~Sincronización con la nube~~ — hecho en v0.1.0 (falta probarla a mano contra la nube real).
 4. **Vibes → Velody**: desde Vibes (`~/Developer/vibes`, tiene su propio Worker con R2 + D1) mandar canciones a Velody; Velody baja el MP3 de R2 y lo mete a la cola de importación. Toca los dos repos; falta diseñar dónde vive la cola de "por importar" (D1 de Vibes o el Worker de Velody).
 5. **Instalación inicial**: crear la venv (`~/.local/share/velody/venv`) con Demucs/PyTorch (CUDA si hay) y Beat This!, y ffmpeg, con pantalla de progreso (port de `main/setup/index.ts` + `SetupScreen.tsx`). Hoy se usa lo que dejó Electron: **imprescindible antes de desinstalarlo**.
 
