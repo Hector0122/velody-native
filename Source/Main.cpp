@@ -2,13 +2,15 @@
 #include "common/Utilities.h"
 #include "common/Components.h"
 #include "common/PluginWindow.h"
+#include "SongEdit.h"
 
-// One project file in ~/Documents/Velody; recordings land next to it as WAV.
-static File projectFile()
+// Project files live in ~/Documents/Velody and recordings land next to them as WAV,
+// so the Electron library is only ever read, never written.
+static File projectFile (const String& name = "Proyecto")
 {
     auto dir = File::getSpecialLocation (File::userDocumentsDirectory).getChildFile ("Velody");
     dir.createDirectory();
-    return dir.getChildFile ("Proyecto.tracktionedit");
+    return dir.getChildFile (File::createLegalFileName (name) + ".tracktionedit");
 }
 
 class MainComponent : public Component,
@@ -17,9 +19,10 @@ class MainComponent : public Component,
 public:
     MainComponent()
     {
-        Helpers::addAndMakeVisible (*this, { &audioButton, &pluginsButton, &playButton, &recordButton,
+        Helpers::addAndMakeVisible (*this, { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton,
                                              &newTrackButton, &deleteButton, &folderButton, &status });
 
+        songsButton.onClick = [this] { showSongsMenu(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
@@ -28,22 +31,10 @@ public:
         deleteButton.onClick = [this] { deleteSelection(); };
         folderButton.onClick = [] { projectFile().revealToUser(); };
 
-        auto f = projectFile();
-        edit = f.existsAsFile() ? te::loadEditFromFile (engine, f) : te::createEmptyEdit (engine, f);
-        edit->playInStopEnabled = true;
-        edit->getTransport().addChangeListener (this);
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
 
-        assignInputsToTracks();
-        save();
-
-        editComponent = std::make_unique<EditComponent> (*edit, selectionManager);
-        editComponent->getEditViewState().showFooters = true; // footer = plugin chain with "+" button
-        editComponent->getEditViewState().showWaveDevices = true;
-        addAndMakeVisible (*editComponent);
-
-        refreshButtons();
+        openEdit (projectFile(), {});
         setSize (1000, 600);
     }
 
@@ -64,10 +55,11 @@ public:
         auto r = getLocalBounds();
         auto top = r.removeFromTop (34);
         const int w = 110;
-        for (auto* b : { &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
+        for (auto* b : { &songsButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
             b->setBounds (top.removeFromLeft (w).reduced (2));
         status.setBounds (top.reduced (4, 0));
-        editComponent->setBounds (r);
+        if (editComponent != nullptr)
+            editComponent->setBounds (r);
     }
 
 private:
@@ -76,12 +68,71 @@ private:
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<EditComponent> editComponent;
 
-    TextButton audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
+    TextButton songsButton { "Canciones" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
                recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
                folderButton { "Carpeta" };
     Label status;
 
+    Array<Library::Song> songs;
+
     void save() { te::EditFileOperations (*edit).save (true, true, false); }
+
+    // A new song edit gets one track per stem; reopening keeps the user's edit (mutes, plugins, takes).
+    void openEdit (const File& f, const Array<File>& stems)
+    {
+        if (edit != nullptr)
+        {
+            edit->getTransport().stop (false, false);
+            save();
+            selectionManager.deselectAll();
+            editComponent = nullptr;
+            edit = nullptr;
+        }
+
+        if (f.existsAsFile())
+        {
+            edit = te::loadEditFromFile (engine, f);
+        }
+        else
+        {
+            edit = te::createEmptyEdit (engine, f);
+            SongEdit::addStemTracks (*edit, stems);
+        }
+
+        edit->playInStopEnabled = true;
+        edit->getTransport().addChangeListener (this);
+
+        assignInputsToTracks();
+        save();
+
+        editComponent = std::make_unique<EditComponent> (*edit, selectionManager);
+        editComponent->getEditViewState().showFooters = true; // footer = plugin chain with "+" button
+        editComponent->getEditViewState().showWaveDevices = true;
+        addAndMakeVisible (*editComponent);
+        resized();
+        refreshButtons();
+    }
+
+    void showSongsMenu()
+    {
+        songs = Library::scan (Library::defaultRoot());
+
+        PopupMenu m;
+        m.addItem (-1, "Proyecto vacío");
+        m.addSeparator();
+        for (int i = 0; i < songs.size(); ++i)
+            m.addItem (i + 1, songs[i].name);
+        if (songs.isEmpty())
+            m.addItem (-2, "No hay canciones en " + Library::defaultRoot().getFullPathName(), false);
+
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton), [this] (int id)
+        {
+            if (id == -1)
+                openEdit (projectFile(), {});
+            else if (id > 0)
+                openEdit (projectFile (songs[id - 1].name), songs[id - 1].stems);
+        });
+    }
 
     void stopOrPlay (bool record)
     {
@@ -95,7 +146,8 @@ private:
             save(); // keep the new take on disk right away
     }
 
-    // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed and monitored.
+    // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed and monitored,
+    // placed after the song's stem tracks so a stem is never recorded over.
     void assignInputsToTracks()
     {
         auto& dm = engine.getDeviceManager();
@@ -110,7 +162,8 @@ private:
 
         edit->getTransport().ensureContextAllocated();
 
-        int trackNum = 0;
+        int trackNum = SongEdit::firstInputTrack (*edit);
+
         for (auto instance : edit->getAllInputDevices())
             if (instance->getInputDevice().getDeviceType() == te::InputDevice::waveDevice)
                 if (auto t = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackNum++))

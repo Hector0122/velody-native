@@ -10,6 +10,7 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 
 ## Qué hace
 
+- **Canciones**: abre una canción de la biblioteca de Velody (`~/.config/velody/output/stems`) con una pista por stem (mute/solo en cada una) y tus entradas en pistas aparte, después de los stems. La biblioteca solo se lee: el proyecto de cada canción y sus tomas se guardan en `~/Documents/Velody/<canción>.tracktionedit`.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
 - Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada y con monitoreo.
@@ -36,6 +37,12 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build
 
 La primera compilación tarda varios minutos (compila JUCE y Tracktion completos).
 
+## Pruebas
+
+```bash
+cmake --build build && ctest --test-dir build --output-on-failure
+```
+
 ## Correr con baja latencia (PipeWire)
 
 ```bash
@@ -52,7 +59,10 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 
 ## Estructura
 
-- `Source/Main.cpp` — toda la app (~200 líneas).
+- `Source/Main.cpp` — ventana, botones y transporte.
+- `Source/Library.h` — escaneo de la biblioteca de canciones (mismas reglas que `scanSongsLibrary` de Electron).
+- `Source/SongEdit.h` — arma las pistas de stems de una canción.
+- `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
 
 ## Licencia
