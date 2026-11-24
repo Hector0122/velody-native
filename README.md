@@ -14,7 +14,7 @@ Esta prueba sirve para validar tres cosas en tu PC antes de migrar velody:
 - **Mezcla** (abajo): volumen (dB) y pan por pista; doble clic regresa a 0. Se guarda con el proyecto.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
 - **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
-- Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada y con monitoreo.
+- Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada, con el monitoreo apagado (se prende en **I → Input Monitoring**; con bocinas causa retroalimentación).
 - **+** en el pie de cada pista: agrega un plugin; clic en el plugin abre su ventana.
 - **Grabar / Detener**, **Play / Stop**, **+ Pista**, **Borrar** (clip, plugin o pista seleccionada).
 - El proyecto y las tomas (WAV) se guardan en `~/Documents/Velody/` (botón **Carpeta**).
@@ -52,7 +52,7 @@ pw-jack ./build/Velody_artefacts/Release/Velody
 
 En **Audio**, elige tipo **JACK**. Para bajar la latencia: `pw-metadata -n settings 0 clock.force-quantum 128`.
 
-Si quieres oírte sin ninguna latencia mientras grabas, usa el monitoreo directo de la Scarlett (botón Direct Monitor o `alsa-scarlett-gui`) y apaga el monitoreo en la pista.
+Si quieres oírte sin ninguna latencia mientras grabas, usa el monitoreo directo de la Scarlett (botón Direct Monitor o `alsa-scarlett-gui`); el monitoreo de la pista ya viene apagado.
 
 ## Plugins de Windows
 

@@ -151,7 +151,7 @@ private:
             save(); // keep the new take on disk right away
     }
 
-    // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed and monitored,
+    // One mono track per hardware input (Scarlett 2i2 -> input 1 and input 2), armed (not monitored),
     // placed after the song's stem tracks so a stem is never recorded over.
     void assignInputsToTracks()
     {
@@ -161,7 +161,9 @@ private:
             if (auto in = dm.getWaveInDevice (i))
             {
                 in->setChannelConfiguration (te::ChannelConfiguration::mono());
-                in->setMonitorMode (te::InputDevice::MonitorMode::automatic);
+                // Off by default: with speakers, monitoring an armed input feeds back. Turn it on per track
+                // with "I" -> Input Monitoring, or use the Scarlett's Direct Monitor (no latency).
+                in->setMonitorMode (te::InputDevice::MonitorMode::off);
                 in->setEnabled (true);
             }
 
