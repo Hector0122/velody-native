@@ -106,7 +106,82 @@ time.sleep(30)
         expectEquals (args[2], String ("/music/Song.mp3"));
         expect (args.contains ("--output-dir") && args[args.indexOf ("--output-dir") + 1] == "/lib");
 
+        testDownload();
         dir.deleteRecursively();
+    }
+
+    void testDownload()
+    {
+        using namespace PythonWorker;
+        auto never = [] { return false; };
+
+        beginTest ("isDownloadableUrl: only http(s) web links");
+        expect (isDownloadableUrl ("https://www.youtube.com/watch?v=abc"));
+        expect (isDownloadableUrl ("  https://youtu.be/abc  "));
+        expect (! isDownloadableUrl ("/home/me/song.mp3"));
+        expect (! isDownloadableUrl ("file:///etc/passwd"));
+        expect (! isDownloadableUrl ("--exec rm"));
+        expect (! isDownloadableUrl ("https://"));
+        expect (! isDownloadableUrl (""));
+
+        beginTest ("downloadArgs calls the bundled download.py like Electron");
+        auto a = downloadArgs ("https://youtu.be/abc");
+        expect (File (a[1]).existsAsFile(), a[1]);
+        expectEquals (a[2], String ("https://youtu.be/abc"));
+
+        auto fakeDownload = script ("dl", R"(
+import json, os, sys
+marker = sys.argv[1]
+if len(sys.argv) > 2 and sys.argv[2] == "blocked" and not os.path.exists(marker):
+    print(json.dumps({"type": "error", "message": "[UPDATE_YTDLP] YouTube blocked the download."}), flush=True)
+    sys.exit(1)
+d = os.path.join(os.path.dirname(marker), "velody_dl_x")
+os.makedirs(d, exist_ok=True)
+path = os.path.join(d, "My Song.mp3")
+open(path, "w").write("x")
+print(json.dumps({"type": "metadata", "title": "My Song", "duration": 200}), flush=True)
+print(json.dumps({"type": "progress", "percent": 50}), flush=True)
+print(json.dumps({"type": "complete", "path": path, "title": "My Song"}), flush=True)
+)", { dir.getChildFile ("updated").getFullPathName() });
+        auto fakeUpdate = script ("update", "import sys\nopen(sys.argv[1], 'w').write('1')\n", { dir.getChildFile ("updated").getFullPathName() });
+        auto failingUpdate = script ("update-fails", "import sys\nsys.exit(1)\n");
+
+        beginTest ("download: progress carries the title, result is the audio path");
+        StringArray seen;
+        int updates = 0;
+        auto o = download (fakeDownload, fakeUpdate, [&] (const String& t, int p) { seen.add (t + ":" + String (p)); },
+                           [&] { ++updates; }, never);
+        expect (o.ok, o.error);
+        expectEquals (o.title, String ("My Song"));
+        expect (File (o.path).existsAsFile());
+        expect (seen.contains ("My Song:50"));
+        expectEquals (updates, 0);
+
+        beginTest ("download: YouTube blocks an old yt-dlp -> update once, retry, succeed");
+        dir.getChildFile ("updated").deleteFile();
+        auto blocked = fakeDownload;
+        blocked.add ("blocked");
+        updates = 0;
+        o = download (blocked, fakeUpdate, [] (const String&, int) {}, [&] { ++updates; }, never);
+        expect (o.ok, o.error);
+        expectEquals (updates, 1);
+
+        beginTest ("download: if the update fails, the user sees YouTube's message");
+        dir.getChildFile ("updated").deleteFile();
+        o = download (blocked, failingUpdate, [] (const String&, int) {}, [] {}, never);
+        expect (! o.ok);
+        expect (o.error.contains ("YouTube blocked"));
+
+        beginTest ("download: other errors are not retried");
+        updates = 0;
+        auto priv = script ("private", "import json\nprint(json.dumps({'type':'error','message':'This video is private'}))\nraise SystemExit(1)\n");
+        o = download (priv, fakeUpdate, [] (const String&, int) {}, [&] { ++updates; }, never);
+        expectEquals (o.error, String ("This video is private"));
+        expectEquals (updates, 0);
+
+        beginTest ("download: complete without a file path is a failure");
+        auto nopath = script ("nopath", "import json\nprint(json.dumps({'type':'complete','title':'x'}))\n");
+        expect (! download (nopath, fakeUpdate, [] (const String&, int) {}, [] {}, never).ok);
     }
 };
 

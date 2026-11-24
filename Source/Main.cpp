@@ -54,7 +54,7 @@ public:
         countInBox.onChange = [this] { if (edit != nullptr) edit->state.setProperty (countInProp, countInBox.getSelectedId() - 1, nullptr); };
 
         songsButton.onClick = [this] { showSongsMenu(); };
-        importButton.onClick = [this] { if (separation != nullptr) separation->signalThreadShouldExit(); else chooseFileToImport(); };
+        importButton.onClick = [this] { if (importing != nullptr) importing->signalThreadShouldExit(); else showImportMenu(); };
         audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
         pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
@@ -73,7 +73,7 @@ public:
 
     ~MainComponent() override
     {
-        separation = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
+        importing = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         save();
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
@@ -156,35 +156,61 @@ private:
 
     Array<Library::Song> songs;
 
-    // Separation runs separate.py on a background thread; one song at a time.
+    // Import runs on a background thread, one song at a time: (YouTube download →) separate.py →
+    // detect_bpm.py, like Electron's url:import + JobManager + analysis.
     // shortcut: no queue and no bitrate choice (separate.py's default), unlike Electron's import screen.
-    struct SeparationThread : Thread
+    struct ImportThread : Thread
     {
-        SeparationThread (MainComponent& o, File f) : Thread ("Separación"), owner (&o), audio (std::move (f)) {}
-        ~SeparationThread() override { stopThread (15000); }
+        ImportThread (MainComponent& o, File f, String link)
+            : Thread ("Importar"), owner (&o), audio (std::move (f)), url (std::move (link)) {}
+        ~ImportThread() override { stopThread (15000); }
 
         void run() override
         {
+            auto stop = [this] { return threadShouldExit(); };
+            File downloadDir;
+
+            if (url.isNotEmpty())
+            {
+                status ("Descargando…");
+                auto dl = PythonWorker::download (PythonWorker::downloadArgs (url), PythonWorker::updateYtDlpArgs(),
+                                                  [this] (const String& title, int pct) { status ("Descargando " + title + "…  " + String (pct) + " %"); },
+                                                  [this] { status ("YouTube bloqueó la descarga; actualizando yt-dlp…"); }, stop);
+                if (! dl.ok)
+                    return finish (dl, url);
+
+                audio = File (dl.path);
+                downloadDir = audio.getParentDirectory(); // download.py's velody_dl_* temp dir
+            }
+
+            const auto name = audio.getFileNameWithoutExtension();
+            status ("Separando " + name + "…");
             auto outcome = PythonWorker::run (PythonWorker::separateArgs (audio, Library::defaultRoot()),
-                                              [this] (int pct) { post ([pct] (MainComponent& m) { m.showSeparationProgress (pct); }); },
-                                              [this] { return threadShouldExit(); });
+                                              [this, name] (int pct) { status ("Separando " + name + "…  " + String (pct) + " %"); }, stop);
             if (outcome.ok && ! threadShouldExit())
-                analyse();
-            post ([outcome] (MainComponent& m) { m.separationFinished (outcome); });
+                analyse (name);
+
+            if (downloadDir.getFileName().startsWith ("velody_dl_"))
+                downloadDir.deleteRecursively();
+
+            finish (outcome, name);
         }
 
         // Like Electron after a separation: BPM/beat grid/downbeat/chords into .velody, so the new
         // song has a metronome and count-in. A failed detection isn't saved (it can be retried).
-        void analyse()
+        void analyse (const String& name)
         {
-            post ([] (MainComponent& m) { m.status.setText ("Analizando tempo y acordes…", dontSendNotification); });
+            status ("Analizando tempo y acordes…");
             for (auto& song : Library::scan (Library::defaultRoot()))
-                if (song.name == audio.getFileNameWithoutExtension())
+                if (song.name == name)
                     if (auto stem = SongMeta::pickBeatTrackingStem (song.stems); stem.existsAsFile())
                         if (auto patch = SongMeta::analysisPatch (PythonWorker::lastLine (PythonWorker::detectBpmArgs (stem),
                                                                                          [this] { return threadShouldExit(); })))
                             SongMeta::update (song.dir, *patch);
         }
+
+        void status (const String& text) { post ([text] (MainComponent& m) { m.status.setText (text, dontSendNotification); }); }
+        void finish (const PythonWorker::Outcome& o, const String& name) { post ([o, name] (MainComponent& m) { m.importFinished (o, name); }); }
 
         void post (std::function<void (MainComponent&)> fn)
         {
@@ -193,10 +219,26 @@ private:
 
         Component::SafePointer<MainComponent> owner;
         File audio;
+        String url;
     };
 
-    std::unique_ptr<SeparationThread> separation;
+    std::unique_ptr<ImportThread> importing;
     std::unique_ptr<FileChooser> chooser;
+
+    void startImport (const File& f, const String& url)
+    {
+        importing = std::make_unique<ImportThread> (*this, f, url);
+        importing->startThread();
+        importButton.setButtonText ("Cancelar");
+    }
+
+    void showImportMenu()
+    {
+        PopupMenu m;
+        m.addItem ("Archivo…", [this] { chooseFileToImport(); });
+        m.addItem ("Desde YouTube…", [this] { askForUrl(); });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
+    }
 
     void chooseFileToImport()
     {
@@ -204,35 +246,45 @@ private:
                                                  "*.wav;*.mp3;*.flac;*.m4a;*.ogg");
         chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc)
         {
-            auto f = fc.getResult();
-            if (! f.existsAsFile())
-                return;
-
-            separation = std::make_unique<SeparationThread> (*this, f);
-            separation->startThread();
-            importButton.setButtonText ("Cancelar");
-            showSeparationProgress (0);
+            if (auto f = fc.getResult(); f.existsAsFile())
+                startImport (f, {});
         });
     }
 
-    void showSeparationProgress (int pct)
+    std::unique_ptr<AlertWindow> urlDialog;
+
+    void askForUrl()
     {
-        if (separation != nullptr)
-            status.setText ("Separando " + separation->audio.getFileNameWithoutExtension() + "…  " + String (pct) + " %", dontSendNotification);
+        urlDialog = std::make_unique<AlertWindow> ("Importar desde YouTube", "Pega el enlace del video:", MessageBoxIconType::NoIcon);
+        urlDialog->addTextEditor ("url", SystemClipboard::getTextFromClipboard().trim().startsWith ("http")
+                                             ? SystemClipboard::getTextFromClipboard().trim() : String(), {});
+        urlDialog->addButton ("Importar", 1, KeyPress (KeyPress::returnKey));
+        urlDialog->addButton ("Cancelar", 0, KeyPress (KeyPress::escapeKey));
+        urlDialog->enterModalState (true, ModalCallbackFunction::create ([this] (int result)
+        {
+            const auto url = urlDialog->getTextEditorContents ("url").trim();
+            urlDialog = nullptr;
+            if (result != 1)
+                return;
+
+            if (PythonWorker::isDownloadableUrl (url))
+                startImport ({}, url);
+            else
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Enlace no válido", "Pega un enlace que empiece con https://");
+        }), false);
     }
 
     // Stems are in the shared library now (Electron sees the song too); open it here.
-    void separationFinished (const PythonWorker::Outcome& o)
+    void importFinished (const PythonWorker::Outcome& o, const String& name)
     {
-        const auto name = separation->audio.getFileNameWithoutExtension();
-        separation = nullptr;
+        importing = nullptr;
         importButton.setButtonText ("Importar");
         refreshButtons();
 
         if (! o.ok)
         {
             if (! o.cancelled)
-                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo separar " + name, o.error);
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo importar " + name, o.error);
             return;
         }
 
@@ -474,7 +526,7 @@ private:
         recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
-        if (separation == nullptr) // while separating, the status shows the progress instead
+        if (importing == nullptr) // while importing, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
                                            : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "

@@ -31,7 +31,7 @@ namespace PythonWorker
 
     struct Message
     {
-        String type, message;
+        String type, message, path, title;
         int percent = -1;
         StringArray stems;
     };
@@ -46,6 +46,8 @@ namespace PythonWorker
         Message m;
         m.type = json["type"].toString();
         m.message = json["message"].toString();
+        m.path = json["path"].toString();
+        m.title = json["title"].toString();
         if (json.hasProperty ("percent"))
             m.percent = jlimit (0, 100, roundToInt ((double) json["percent"]));
         if (auto* a = json["stems"].getArray())
@@ -162,67 +164,89 @@ namespace PythonWorker
         std::string pending;
     };
 
+    // Runs a process to the end (blocking), handing each stdout line to onLine. `shouldStop` sends
+    // SIGTERM; so does the timeout (Electron: 10 min for Demucs and downloads).
+    struct Ran { bool started = false, stopped = false, timedOut = false; int code = -1; };
+
+    inline Ran drain (const StringArray& args, std::function<void (const String&)> onLine,
+                      std::function<bool()> shouldStop, int timeoutMs)
+    {
+        Ran r;
+        Process p;
+        if (! (r.started = p.start (args)))
+            return r;
+
+        const auto deadline = Time::getMillisecondCounter() + (uint32) timeoutMs;
+        String line;
+        for (;;)
+        {
+            if (! r.stopped && (shouldStop() || Time::getMillisecondCounter() > deadline))
+            {
+                r.timedOut = ! shouldStop();
+                r.stopped = true;
+                p.terminate();
+            }
+
+            auto read = p.readLine (line, 200);
+            if (read == Process::Read::eof)
+                break;
+            if (read == Process::Read::line)
+                onLine (line);
+        }
+        r.code = p.waitForExit();
+        return r;
+    }
+
     struct Outcome
     {
         bool ok = false, cancelled = false;
         String error;
-        StringArray stems;
+        StringArray stems;  // separate.py
+        String path, title; // download.py
     };
 
-    // Runs one worker script to the end (blocking): progress goes to onProgress, `shouldStop` cancels
-    // with SIGTERM, and it's killed after `timeoutMs` (Electron: 10 min for Demucs).
+    // A JSON-lines worker (separate.py, download.py): progress to onProgress, success = exit 0 plus a
+    // "complete" message; the first "error" message is the one shown.
     inline Outcome run (const StringArray& args, std::function<void (int)> onProgress,
-                        std::function<bool()> shouldStop, int timeoutMs = 10 * 60 * 1000)
+                        std::function<bool()> shouldStop, int timeoutMs = 10 * 60 * 1000,
+                        std::function<void (const String&)> onTitle = {})
     {
         Outcome o;
-        Process p;
-        if (! p.start (args))
+        bool complete = false;
+        auto ran = drain (args, [&] (const String& line)
         {
+            auto m = parseLine (line);
+            if (! m)
+                return;
+            if (m->type == "progress" && m->percent >= 0 && onProgress)
+                onProgress (m->percent);
+            else if (m->type == "metadata" && m->title.isNotEmpty())
+            {
+                o.title = m->title;
+                if (onTitle)
+                    onTitle (o.title);
+            }
+            else if (m->type == "complete")
+            {
+                complete = true;
+                o.stems = m->stems;
+                o.path = m->path;
+                if (m->title.isNotEmpty())
+                    o.title = m->title;
+            }
+            else if (m->type == "error" && o.error.isEmpty())
+                o.error = m->message;
+        }, shouldStop, timeoutMs);
+
+        if (! ran.started)
             o.error = "No se pudo iniciar " + args[0];
-            return o;
-        }
-
-        const auto deadline = Time::getMillisecondCounter() + (uint32) timeoutMs;
-        bool stopping = false, timedOut = false;
-        String line;
-
-        for (;;)
+        else if (ran.stopped)
         {
-            if (! stopping && (shouldStop() || Time::getMillisecondCounter() > deadline))
-            {
-                timedOut = ! shouldStop();
-                stopping = true;
-                p.terminate();
-            }
-
-            auto r = p.readLine (line, 200);
-            if (r == Process::Read::eof)
-                break;
-            if (r != Process::Read::line)
-                continue;
-
-            if (auto m = parseLine (line))
-            {
-                if (m->type == "progress" && m->percent >= 0 && onProgress)
-                    onProgress (m->percent);
-                else if (m->type == "complete")
-                    o.stems = m->stems;
-                else if (m->type == "error" && o.error.isEmpty())
-                    o.error = m->message;
-            }
+            o.cancelled = ! ran.timedOut;
+            o.error = ran.timedOut ? "Tardó demasiado (límite de 10 min)" : "Cancelado";
         }
-
-        const int code = p.waitForExit();
-
-        if (stopping)
-        {
-            o.cancelled = ! timedOut;
-            o.error = timedOut ? "La separación tardó demasiado (límite de 10 min)" : "Cancelado";
-        }
-        else if (o.error.isEmpty() && (code != 0 || o.stems.isEmpty()))
-        {
-            o.error = "El proceso de Python terminó con código " + String (code);
-        }
+        else if (o.error.isEmpty() && (ran.code != 0 || ! complete))
+            o.error = "El proceso de Python terminó con código " + String (ran.code);
 
         o.ok = o.error.isEmpty();
         return o;
@@ -232,27 +256,47 @@ namespace PythonWorker
     // failure/cancel/timeout.
     inline String lastLine (const StringArray& args, std::function<bool()> shouldStop, int timeoutMs = 10 * 60 * 1000)
     {
-        Process p;
-        if (! p.start (args))
-            return {};
+        String last;
+        auto ran = drain (args, [&] (const String& l) { if (l.trim().isNotEmpty()) last = l; }, shouldStop, timeoutMs);
+        return ran.started && ! ran.stopped && ran.code == 0 ? last : String();
+    }
 
-        const auto deadline = Time::getMillisecondCounter() + (uint32) timeoutMs;
-        bool stopped = false;
-        String line, last;
-        for (;;)
+    // Only web links go to yt-dlp (it would also take local paths and other schemes).
+    inline bool isDownloadableUrl (const String& s)
+    {
+        const auto t = s.trim();
+        return (t.startsWithIgnoreCase ("https://") || t.startsWithIgnoreCase ("http://"))
+               && URL (t).getDomain().isNotEmpty() && ! t.containsAnyOf (" \t\n");
+    }
+
+    // download.py with Electron's retry: when YouTube blocks an outdated yt-dlp ("[UPDATE_YTDLP]"),
+    // update yt-dlp in the venv and try once more. The audio lands in a velody_dl_* temp dir.
+    inline Outcome download (const StringArray& downloadArgs, const StringArray& updateArgs,
+                             std::function<void (const String& title, int pct)> onProgress,
+                             std::function<void()> onUpdating, std::function<bool()> shouldStop)
+    {
+        auto attempt = [&]
         {
-            if (! stopped && (shouldStop() || Time::getMillisecondCounter() > deadline))
+            String title;
+            auto o = run (downloadArgs, [&] (int pct) { onProgress (title, pct); }, shouldStop, 10 * 60 * 1000,
+                          [&] (const String& t) { title = t; });
+            if (o.ok && ! File::isAbsolutePath (o.path))
             {
-                stopped = true;
-                p.terminate();
+                o.ok = false;
+                o.error = "La descarga terminó sin archivo de audio";
             }
-            auto r = p.readLine (line, 200);
-            if (r == Process::Read::eof)
-                break;
-            if (r == Process::Read::line && line.trim().isNotEmpty())
-                last = line;
-        }
-        return p.waitForExit() == 0 && ! stopped ? last : String();
+            return o;
+        };
+
+        auto o = attempt();
+        if (o.ok || ! o.error.contains ("[UPDATE_YTDLP]"))
+            return o;
+
+        onUpdating();
+        auto updated = drain (updateArgs, [] (const String&) {}, shouldStop, 2 * 60 * 1000);
+        if (! updated.started || updated.stopped || updated.code != 0)
+            return o; // keep YouTube's message
+        return attempt();
     }
 
     inline File ffmpegPath()
@@ -267,6 +311,15 @@ namespace PythonWorker
         return { pythonPath().getFullPathName(), scriptsDir().getChildFile ("detect_bpm.py").getFullPathName(),
                  stem.getFullPathName(), "--ffmpeg-path", ffmpegPath().getFullPathName() };
     }
+
+    // download.py as handlers.ts url:import calls it.
+    inline StringArray downloadArgs (const String& url)
+    {
+        return { pythonPath().getFullPathName(), scriptsDir().getChildFile ("download.py").getFullPathName(),
+                 url.trim(), "--ffmpeg-path", ffmpegPath().getFullPathName() };
+    }
+
+    inline StringArray updateYtDlpArgs() { return { pythonPath().getFullPathName(), "-m", "pip", "install", "-U", "yt-dlp" }; }
 
     // separate.py exactly as JobManager.ts calls it; stems land in <outputDir>/<file name>/.
     inline StringArray separateArgs (const File& audio, const File& outputDir)
