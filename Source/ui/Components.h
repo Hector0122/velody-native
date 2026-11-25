@@ -2,6 +2,7 @@
 #include "../Theme.h"
 #include "../SongEdit.h"
 #include "../ClipEdit.h"
+#include "../Zoom.h"
 /*
     ,--.                     ,--.     ,--.  ,--.
   ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2018
@@ -25,6 +26,7 @@ namespace IDs
     DECLARE_ID (viewX1)
     DECLARE_ID (viewX2)
     DECLARE_ID (viewY)
+    DECLARE_ID (trackHeight)
     DECLARE_ID (drawWaveforms)
     DECLARE_ID (showHeaders)
     DECLARE_ID (showFooters)
@@ -59,9 +61,11 @@ public:
         showMidiDevices.referTo (state, IDs::showMidiDevices, um, false);
         showWaveDevices.referTo (state, IDs::showWaveDevices, um, true);
 
-        viewX1.referTo (state, IDs::viewX1, um, 0s);
-        viewX2.referTo (state, IDs::viewX2, um, 60s);
-        viewY.referTo (state, IDs::viewY, um, 0);
+        // Velody: zooming and scrolling aren't edits, so they stay out of Ctrl+Z (nullptr undo manager).
+        viewX1.referTo (state, IDs::viewX1, nullptr, 0s);
+        viewX2.referTo (state, IDs::viewX2, nullptr, 60s);
+        viewY.referTo (state, IDs::viewY, nullptr, 0);
+        trackHeight.referTo (state, IDs::trackHeight, nullptr, Zoom::defaultHeight);
     }
     
     int timeToX (te::TimePosition time, int width) const
@@ -88,6 +92,14 @@ public:
     
     CachedValue<te::TimePosition> viewX1, viewX2;
     CachedValue<double> viewY;
+    CachedValue<int> trackHeight; // Velody: every lane's height (a track can have its own, Zoom::heightOf)
+
+    Zoom::View view() const { return { viewX1.get().inSeconds(), viewX2.get().inSeconds() }; }
+    void setView (Zoom::View v)
+    {
+        viewX1 = te::TimePosition::fromSeconds (v.start);
+        viewX2 = te::TimePosition::fromSeconds (v.end);
+    }
     
     ValueTree state;
 };
@@ -187,11 +199,18 @@ public:
     
     void paint (Graphics& g) override;
     void mouseDown (const MouseEvent& e) override;
+    // Velody: drag the bottom edge to make this track taller/shorter (double-click it: back to the rest's).
+    void mouseMove (const MouseEvent& e) override;
+    void mouseDrag (const MouseEvent& e) override;
+    void mouseDoubleClick (const MouseEvent& e) override;
     void resized() override;
+    static constexpr int edgeGrab = 5;
+    bool onBottomEdge (const MouseEvent& e) const { return e.y >= getHeight() - edgeGrab; }
     
 private:
     void valueTreeChanged() override {}
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    int dragStartHeight = 0;
     
     EditViewState& editViewState;
     te::Track::Ptr track;
@@ -317,6 +336,7 @@ namespace VelodyUi
 {
     inline std::function<void()> onMonitorOn;
     inline std::function<void (te::MidiClip&)> onEditMidiClip; // double-click on a MIDI clip
+    inline std::function<void (te::Track::Ptr)> onAddEffect;    // «+ Efecto»: the search window (PluginPicker.h)
 }
 
 // Velody: seconds ruler over the lanes; a click moves the playhead there.
@@ -345,9 +365,19 @@ public:
     
     EditViewState& getEditViewState()   { return editViewState; }
     // Velody: the track list scrolls (wheel / scrollbar) when there are more tracks than fit.
+    // Velody zoom (like REAPER): Ctrl+wheel = closer/farther in time (around the mouse), Alt+wheel = taller
+    // or shorter tracks, Shift+wheel = move along the song, wheel = scroll the tracks.
     void mouseWheelMove (const MouseEvent&, const MouseWheelDetails&) override;
     void scrollTracksBy (double pixels);
-    ScrollBar trackScroll { true };
+    void zoomTime (double factor, double anchorSeconds);
+    void zoomTimeAtCentre (double factor) { auto v = editViewState.view(); zoomTime (factor, (v.start + v.end) / 2); }
+    void scrollTime (double seconds);
+    void scaleTrackHeight (double factor);
+    void followPlayhead();               // while playing: turn the page when the playhead leaves the view
+    double timeLimit() const;
+    double laneTimeAt (int x) const;     // the time under x (in this component)
+    int laneHeight (int index) const;
+    ScrollBar trackScroll { true }, timeScroll { false };
     
 private:
     void valueTreeChanged() override {}
@@ -378,6 +408,7 @@ private:
     OwnedArray<TrackFooterComponent> footers;
     
     bool updateTracks = false, updateZoom = false;
+    int headerW = 170, footerW = 0;
 };
 
 #include "Components.cpp"

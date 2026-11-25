@@ -64,6 +64,19 @@ struct TrimTests : UnitTest
         expect (! shouldStop (t, 99.9, 100.02, false, false)); // stopped
         expect (! shouldStop ({ 10, std::nullopt }, 99.9, 1000.0, true, false));
 
+        beginTest ("with no trim end, playback stops where the audio ends (3:58 song, not playing on forever)");
+        const double songEnd = 238.0;
+        expect (playbackEnd ({}, songEnd) == songEnd);
+        expect (playbackEnd ({ 0, 100.0 }, songEnd) == 100.0);   // the trim's end wins
+        expect (! playbackEnd ({}, 0.0).has_value());              // empty project: never stops
+        expect (shouldStopAtEnd ({}, songEnd, 237.98, 238.01, true, false, false));
+        expect (! shouldStopAtEnd ({}, songEnd, 200.0, 200.03, true, false, false)); // not there yet
+        expect (! shouldStopAtEnd ({}, songEnd, 237.98, 238.01, true, true, false)); // recording past the end
+        expect (! shouldStopAtEnd ({}, songEnd, 237.98, 238.01, true, false, true)); // loop on
+        expect (! shouldStopAtEnd ({}, songEnd, 300.0, 300.03, true, false, false)); // started past the end
+        expect (! shouldStopAtEnd ({}, 0.0, 10.0, 10.03, true, false, false));
+        expect (shouldStopAtEnd ({ 10, 100.0 }, songEnd, 99.9, 100.02, true, false, false));
+
         beginTest ("export range in edit time (the edit runs at song time / speed)");
         auto [s, e] = renderRange ({ 10, 100.0 }, 400.0, 0.5);
         expect (s == 20.0 && e == 200.0);

@@ -106,20 +106,6 @@ PluginTreeGroup::PluginTreeGroup (te::Edit& edit, KnownPluginList::PluginTree& t
         builtinFolder->createBuiltInItems (num, types);
     }
 
-    {
-        auto racksFolder = new PluginTreeGroup (TRANS("Plugin Racks"));
-        addSubItem (racksFolder);
-
-        racksFolder->addSubItem (new PluginTreeItem (String (te::RackType::getRackPresetPrefix()) + "-1",
-                                                     TRANS("Create New Empty Rack"),
-                                                     te::RackInstance::xmlTypeName, false, false));
-
-        int i = 0;
-        for (auto rf : edit.getRackList().getTypes())
-            racksFolder->addSubItem (new PluginTreeItem ("RACK__" + String (i++), rf->rackName,
-                                                         te::RackInstance::xmlTypeName, false, false));
-    }
-
     populateFrom (tree);
 }
 
@@ -972,14 +958,39 @@ void TrackHeaderComponent::paint (Graphics& g)
     }
 }
 
-void TrackHeaderComponent::mouseDown (const MouseEvent&)
+void TrackHeaderComponent::mouseDown (const MouseEvent& e)
 {
-    editViewState.selectionManager.selectOnly (track.get());
+    dragStartHeight = onBottomEdge (e) ? getHeight() : 0;
+    if (dragStartHeight == 0)
+        editViewState.selectionManager.selectOnly (track.get());
+}
+
+void TrackHeaderComponent::mouseMove (const MouseEvent& e)
+{
+    setMouseCursor (onBottomEdge (e) ? MouseCursor::UpDownResizeCursor : MouseCursor::NormalCursor);
+}
+
+void TrackHeaderComponent::mouseDrag (const MouseEvent& e)
+{
+    if (dragStartHeight > 0)
+        track->state.setProperty (Zoom::trackHeightProp, Zoom::clampHeight (dragStartHeight + e.getDistanceFromDragStartY()), nullptr);
+}
+
+void TrackHeaderComponent::mouseDoubleClick (const MouseEvent& e)
+{
+    if (onBottomEdge (e))
+        track->state.removeProperty (Zoom::trackHeightProp, nullptr);
 }
 
 void TrackHeaderComponent::resized()
 {
-    auto r = getLocalBounds().reduced (4).withTrimmedLeft (8);
+    // Velody: the controls keep their size at the top of a tall track; a very short one shows just the name.
+    const bool compact = getHeight() < 48;
+    for (auto* b : { &inputButton, &armButton, &muteButton, &soloButton, &monitorButton })
+        b->setVisible (! compact);
+    auto r = getLocalBounds().withHeight (jmin (getHeight(), Zoom::defaultHeight)).reduced (4).withTrimmedLeft (8);
+    if (compact)
+        return trackName.setBounds (r);
     trackName.setBounds (r.removeFromTop (r.getHeight() / 2));
     r = r.withTrimmedBottom (2);
 
@@ -1034,18 +1045,8 @@ TrackFooterComponent::TrackFooterComponent (EditViewState& evs, te::Track::Ptr t
 
     addButton.onClick = [this]
     {
-        if (auto plugin = showMenuAndCreatePlugin (track->edit))
-        {
-            // Velody: after the instrument (if any), before the track's own volume/meter.
-            int index = 0, i = 0;
-            for (auto p : track->pluginList)
-            {
-                if (dynamic_cast<te::VolumeAndPanPlugin*> (p) != nullptr || dynamic_cast<te::LevelMeterPlugin*> (p) != nullptr)
-                    break;
-                index = ++i;
-            }
-            track->pluginList.insertPlugin (plugin, index, &editViewState.selectionManager);
-        }
+        if (VelodyUi::onAddEffect)
+            VelodyUi::onAddEffect (track);
     };
 }
 
@@ -1091,7 +1092,7 @@ void TrackFooterComponent::mouseDown (const MouseEvent&)
 void TrackFooterComponent::resized()
 {
     // Velody: "+ Efecto" on top, the effects by name below.
-    auto r = getLocalBounds().reduced (6, 4).withTrimmedBottom (1);
+    auto r = getLocalBounds().withHeight (jmin (getHeight(), Zoom::defaultHeight)).reduced (6, 4).withTrimmedBottom (1);
     addButton.setBounds (r.removeFromTop (r.getHeight() / 2).withWidth (80).reduced (0, 1));
     r.removeFromTop (2);
     const int w = plugins.isEmpty() ? 0 : jmax (40, r.getWidth() / plugins.size());
@@ -1366,6 +1367,9 @@ EditComponent::EditComponent (te::Edit& e, te::SelectionManager& sm)
     addChildComponent (trackScroll);
     trackScroll.addListener (this);
     trackScroll.setAutoHide (false);
+    addAndMakeVisible (timeScroll);
+    timeScroll.addListener (this);
+    timeScroll.setAutoHide (false);
 
     markAndUpdate (updateTracks);
 }
@@ -1382,7 +1386,8 @@ void EditComponent::valueTreePropertyChanged (juce::ValueTree& v, const juce::Id
     {
         if (i == IDs::viewX1
             || i == IDs::viewX2
-            || i == IDs::viewY)
+            || i == IDs::viewY
+            || i == IDs::trackHeight)
         {
             markAndUpdate (updateZoom);
         }
@@ -1395,6 +1400,10 @@ void EditComponent::valueTreePropertyChanged (juce::ValueTree& v, const juce::Id
         {
             repaint();
         }
+    }
+    else if (i == Zoom::trackHeightProp && te::TrackList::isTrack (v))
+    {
+        markAndUpdate (updateZoom);
     }
 }
 
@@ -1430,17 +1439,27 @@ void EditComponent::resized()
 {
     jassert (headers.size() == tracks.size());
 
-    const int trackHeight = 58, trackGap = 1, rulerHeight = 26;
-    const int headerWidth = editViewState.showHeaders ? 170 : 0;
-    const int footerWidth = editViewState.showFooters ? 200 : 0;
+    const int trackGap = 1, rulerHeight = 26, timeScrollH = 10;
+    headerW = editViewState.showHeaders ? 170 : 0;
+    footerW = editViewState.showFooters ? 200 : 0;
+    const int headerWidth = headerW, footerWidth = footerW;
+    const int lanesW = getWidth() - headerWidth - footerWidth;
 
-    playhead.setBounds (getLocalBounds().withTrimmedLeft (headerWidth).withTrimmedRight (footerWidth));
-    ruler.setBounds (headerWidth, 0, getWidth() - headerWidth - footerWidth, rulerHeight);
+    playhead.setBounds (getLocalBounds().withTrimmedLeft (headerWidth).withTrimmedRight (footerWidth).withTrimmedBottom (timeScrollH));
+    ruler.setBounds (headerWidth, 0, lanesW, rulerHeight);
     ruler.toFront (false);
     playhead.toFront (false);
 
+    // Velody: the song's length along the bottom (drag it to move; it shrinks as you zoom in).
+    const auto v = editViewState.view();
+    const double limit = timeLimit();
+    timeScroll.setRangeLimits (0.0, jmax (limit, v.end));
+    timeScroll.setCurrentRange (v.start, v.span(), dontSendNotification);
+    timeScroll.setBounds (headerWidth, getHeight() - timeScrollH, lanesW, timeScrollH);
+    timeScroll.toFront (false);
+
     // Velody: vertical scrolling (viewY ≤ 0), with a scrollbar at the right of the lanes.
-    const int visible = getHeight() - rulerHeight;
+    const int visible = getHeight() - rulerHeight - timeScrollH;
     const int content = contentHeight();
     if (content <= visible) editViewState.viewY = 0.0;
     else                    editViewState.viewY = jlimit ((double) (visible - content), 0.0, editViewState.viewY.get());
@@ -1453,19 +1472,54 @@ void EditComponent::resized()
     int y = rulerHeight + roundToInt (editViewState.viewY.get());
     for (int i = 0; i < jmin (headers.size(), tracks.size()); i++)
     {
-        auto h = headers[i];
-        auto t = tracks[i];
-        auto f = footers[i];
-
-        h->setBounds (0, y, headerWidth, trackHeight);
-        t->setBounds (headerWidth, y, getWidth() - headerWidth - footerWidth, trackHeight);
-        f->setBounds (getWidth() - footerWidth, y, footerWidth, trackHeight);
-
-        y += trackHeight + trackGap;
+        const int h = laneHeight (i);
+        headers[i]->setBounds (0, y, headerWidth, h);
+        tracks[i]->setBounds (headerWidth, y, lanesW, h);
+        footers[i]->setBounds (getWidth() - footerWidth, y, footerWidth, h);
+        y += h + trackGap;
     }
 
     for (auto t : tracks)
         t->resized();
+}
+
+int EditComponent::laneHeight (int index) const
+{
+    auto* t = tracks[index];
+    return t != nullptr ? Zoom::heightOf (t->getTrack()->state, editViewState.trackHeight.get()) : Zoom::defaultHeight;
+}
+
+double EditComponent::timeLimit() const
+{
+    return Zoom::limit (SongEdit::contentLength (edit));
+}
+
+double EditComponent::laneTimeAt (int x) const
+{
+    const int w = jmax (1, getWidth() - headerW - footerW);
+    const auto v = editViewState.view();
+    return v.start + v.span() * jlimit (0.0, 1.0, (x - headerW) / (double) w);
+}
+
+void EditComponent::zoomTime (double factor, double anchorSeconds)
+{
+    editViewState.setView (Zoom::around (editViewState.view(), anchorSeconds, factor, timeLimit()));
+}
+
+void EditComponent::scrollTime (double seconds)
+{
+    editViewState.setView (Zoom::scroll (editViewState.view(), seconds, timeLimit()));
+}
+
+void EditComponent::scaleTrackHeight (double factor)
+{
+    editViewState.trackHeight = Zoom::scaledHeight (editViewState.trackHeight.get(), factor);
+}
+
+void EditComponent::followPlayhead()
+{
+    if (auto next = Zoom::follow (editViewState.view(), edit.getTransport().getPosition().inSeconds(), timeLimit()))
+        editViewState.setView (*next);
 }
 
 void EditComponent::buildTracks()
@@ -1582,7 +1636,10 @@ void MidiClipComponent::mouseDoubleClick (const MouseEvent&)
 
 int EditComponent::contentHeight() const
 {
-    return tracks.size() * (58 + 1); // trackHeight + trackGap, as laid out in resized()
+    int h = 0;
+    for (int i = 0; i < tracks.size(); ++i)
+        h += laneHeight (i) + 1; // + trackGap, as laid out in resized()
+    return h;
 }
 
 void EditComponent::scrollTracksBy (double pixels)
@@ -1591,13 +1648,26 @@ void EditComponent::scrollTracksBy (double pixels)
     resized();
 }
 
-void EditComponent::scrollBarMoved (ScrollBar*, double newStart)
+void EditComponent::scrollBarMoved (ScrollBar* bar, double newStart)
 {
+    if (bar == &timeScroll)
+    {
+        const auto v = editViewState.view();
+        editViewState.setView (Zoom::clamp ({ newStart, newStart + v.span() }, jmax (timeLimit(), v.end)));
+        return;
+    }
     editViewState.viewY = -newStart;
     resized();
 }
 
-void EditComponent::mouseWheelMove (const MouseEvent&, const MouseWheelDetails& w)
+void EditComponent::mouseWheelMove (const MouseEvent& e, const MouseWheelDetails& w)
 {
+    const auto m = e.mods;
+    if (m.isCommandDown())
+        return zoomTime (Zoom::wheelFactor (w.deltaY), laneTimeAt (e.getEventRelativeTo (this).x));
+    if (m.isAltDown())
+        return scaleTrackHeight (1.0 / Zoom::wheelFactor (w.deltaY));
+    if (m.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
+        return scrollTime (-(m.isShiftDown() ? w.deltaY : w.deltaX) * editViewState.view().span() * 0.5);
     scrollTracksBy (w.deltaY * 220.0);
 }

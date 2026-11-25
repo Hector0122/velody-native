@@ -62,6 +62,25 @@ namespace Trim
         return playing && ! recording && r.end && lastPos < *r.end && songPos >= *r.end;
     }
 
+    // Where playback stops by itself: the trim's end, else where the audio ends (song time; 0 = nothing
+    // there yet, so it never stops). With the loop on it never stops: the loop brings it back.
+    inline std::optional<double> playbackEnd (const Range& r, double contentEnd)
+    {
+        if (r.end)
+            return r.end;
+        if (contentEnd > 0)
+            return contentEnd;
+        return {};
+    }
+
+    inline bool shouldStopAtEnd (const Range& r, double contentEnd, double lastPos, double songPos, bool playing, bool recording, bool looping)
+    {
+        if (looping)
+            return false;
+        const auto end = playbackEnd (r, contentEnd);
+        return playing && ! recording && end && lastPos < *end && songPos >= *end;
+    }
+
     // The export range in edit time (the edit runs at song time / speed).
     inline std::pair<double, double> renderRange (const Range& r, double editLength, double speed)
     {

@@ -23,6 +23,7 @@
 #include "LiveMonitoring.h"
 #include "Instruments.h"
 #include "Mixing.h"
+#include "PluginPicker.h"
 #include "AppSettings.h"
 #include "ui/PianoRoll.h"
 #include "ui/CountInOverlay.h"
@@ -194,15 +195,18 @@ public:
         startButton.onClick = [this] { goToMusicStart(); };
         trimButton.setTooltip (String (u8"Tramo: marca dónde empieza y dónde termina la canción para ti (para saltarte una intro larga). No corta el audio; se guarda en la canción"));
         trimButton.onClick = [this] { showTrimMenu(); };
-        // The trim's end: playback stops there.
+        // The trim's end, or where the audio ends: playback stops there.
         trimTimer.fn = [this]
         {
             auto& t = edit->getTransport();
             const double pos = t.getPosition().inSeconds() * speed();
-            const bool stop = Trim::shouldStop (trim, lastTrimCheck, pos, t.isPlaying(), t.isRecording());
+            const bool stop = Trim::shouldStopAtEnd (trim, SongEdit::contentLength (*edit) * speed(), lastTrimCheck, pos,
+                                                     t.isPlaying(), t.isRecording(), t.looping.get());
             lastTrimCheck = pos;
             if (stop)
                 stopPlayback();
+            else if (t.isPlaying() && editComponent != nullptr)
+                editComponent->followPlayhead(); // zoomed in: the view turns the page with the playhead
             // The count-in, big on screen while it plays.
             const bool counting = countIn != nullptr && countIn->isArmed() && t.isPlaying();
             countInOverlay.show (counting ? CountInDisplay::at (countInClicks, t.getPosition().inSeconds(), countInFrom) : CountInDisplay::State());
@@ -222,6 +226,7 @@ public:
         recordButton.onClick = [this] { stopOrPlay (true); };
         newTrackButton.onClick = [this] { showNewTrackMenu(); };
         VelodyUi::onEditMidiClip = [this] (te::MidiClip& c) { showPianoRoll (c); };
+        VelodyUi::onAddEffect = [this] (te::Track::Ptr t) { showEffectPicker (t); };
         mixer.onMixPanChanged = [this] (float pan) { settings.setValue ("mixPan", pan); };
         deleteButton.onClick = [this] { deleteSelection(); };
 
@@ -266,6 +271,8 @@ public:
         imports = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
         VelodyUi::onMonitorOn = nullptr;
+        VelodyUi::onAddEffect = nullptr;
+        VelodyUi::onEditMidiClip = nullptr;
         if (forcedQuantum)
             LiveMonitoring::releaseBuffer(); // PipeWire's buffer back to automatic for the other apps
         save();
@@ -556,10 +563,8 @@ private:
         m.addSubMenu ("Pista de instrumento (MIDI)", instruments);
         // An effect bus: one reverb/delay several tracks feed (Envíos in the mixer).
         PopupMenu busEffects;
-        busEffects.addItem (String (u8"Vacío (le pones el efecto después)"), [this] { addBus ({}); });
-        for (auto& d : engine.getPluginManager().knownPluginList.getTypes())
-            if (! d.isInstrument)
-                busEffects.addItem (d.name + "  (" + d.pluginFormatName + ")", [this, d] { addBus (d); });
+        busEffects.addItem (String (u8"Con un efecto… (buscar)"), [this] { showEffectPicker (nullptr); });
+        busEffects.addItem (String (u8"Vacío (le pones el efecto después)"), [this] { addBus ("Efectos", {}); });
         m.addSubMenu (String (u8"Bus de efectos (reverb, delay…)"), busEffects);
         m.addSeparator();
         m.addItem (String (u8"Quitar pistas vacías (deja 2 para grabar)"), [this]
@@ -580,10 +585,38 @@ private:
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (newTrackButton));
     }
 
-    void addBus (const PluginDescription& effect)
+    // «+ Efecto» on a track, or a new bus's effect (track == nullptr): search, pick, it goes in.
+    void showEffectPicker (te::Track::Ptr track)
     {
-        auto plugin = effect.name.isNotEmpty() ? edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, effect) : te::Plugin::Ptr();
-        if (auto* t = Mixing::addBus (*edit, effect.name.isNotEmpty() ? effect.name : String ("Efectos"), plugin))
+        auto* panel = new PluginPicker::Panel (PluginPicker::all (engine.getPluginManager().knownPluginList.getTypes()),
+                                               PluginPicker::loadRecents (settings),
+                                               [this, track] (const PluginPicker::Choice& c)
+        {
+            if (auto* w = effectWindow.getComponent())
+                w->exitModalState (0);
+            PluginPicker::saveRecents (settings, PluginPicker::remember (PluginPicker::loadRecents (settings), c.key));
+            if (track == nullptr)
+                return addBus (c.name, PluginPicker::create (*edit, c));
+            if (PluginPicker::addTo (*track, c, &selectionManager) == nullptr)
+                status.setText (String (u8"No se pudo cargar «") + c.name + String (u8"»"), dontSendNotification);
+        });
+
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = track != nullptr ? String (u8"Agregar efecto a «") + track->getName() + String (u8"»") : String (u8"Efecto del bus");
+        o.dialogBackgroundColour = getLookAndFeel().findColour (ResizableWindow::backgroundColourId);
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+        o.content.setOwned (panel);
+        o.componentToCentreAround = this;
+        effectWindow = o.launchAsync();
+    }
+
+    Component::SafePointer<DialogWindow> effectWindow;
+
+    void addBus (const String& name, te::Plugin::Ptr plugin)
+    {
+        if (auto* t = Mixing::addBus (*edit, name, plugin))
         {
             SongEdit::setMixPan (*edit, mixPanPreference());
             mixer.rebuild();
@@ -1357,6 +1390,17 @@ private:
         if (k == KeyPress ('s', 0, 0))                     return splitAtCursor(), true;
         if (k == KeyPress ('d', cmd, 0))                   return duplicateSelected(), true;
         if (k == KeyPress ('l', 0, 0))                     return toggleLoop(), true;
+        // Zoom (like REAPER): + / − closer/farther in time, Ctrl+↑ / Ctrl+↓ taller/shorter tracks,
+        // Ctrl+0 the whole song. Also with the mouse: Ctrl+wheel, Alt+wheel, Shift+wheel.
+        if (editComponent != nullptr)
+        {
+            const auto c = k.getTextCharacter();
+            if ((c == '+' || c == '=') && ! k.getModifiers().isCommandDown()) return editComponent->zoomTimeAtCentre (0.67), true;
+            if (c == '-' && ! k.getModifiers().isCommandDown())               return editComponent->zoomTimeAtCentre (1.5), true;
+            if (k == KeyPress (KeyPress::upKey, cmd, 0))                      return editComponent->scaleTrackHeight (1.25), true;
+            if (k == KeyPress (KeyPress::downKey, cmd, 0))                    return editComponent->scaleTrackHeight (0.8), true;
+            if (k == KeyPress ('0', cmd, 0))                                  return fitViewToSong(), true;
+        }
         if (k == KeyPress::deleteKey || k == KeyPress::backspaceKey)
             return deleteSelection(), true;
         if (k == KeyPress ('z', cmd, 0))                   return edit->getUndoManager().undo(), refreshAfterEdit(), true;
@@ -1760,10 +1804,17 @@ private:
         // Keep the same spot in the song when the speed (and so the edit timeline) changes.
         auto& t = edit->getTransport();
         const double songPos = t.getPosition().inSeconds() * appliedSpeed;
+        const double ratio = appliedSpeed / speed();
         SongEdit::setPractice (*edit, speed(), semitones());
         t.setPosition (te::TimePosition::fromSeconds (songPos / speed()));
         appliedSpeed = speed();
-        fitViewToSong(); // the song got longer/shorter
+        // The song got longer/shorter: the same part of it stays on screen, at the same zoom.
+        if (editComponent != nullptr)
+        {
+            auto& v = editComponent->getEditViewState();
+            const auto old = v.view();
+            v.setView (Zoom::clamp ({ old.start * ratio, old.end * ratio }, Zoom::limit (SongEdit::contentLength (*edit))));
+        }
         refreshPracticeControls();
         songLength = currentSong.has_value() ? SongEdit::contentLength (*edit) * speed() : 0.0;
         refreshButtons();
