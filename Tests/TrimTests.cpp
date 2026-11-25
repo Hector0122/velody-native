@@ -29,7 +29,7 @@ struct TrimTests : UnitTest
         beginTest ("nothing saved: the whole song");
         auto r = load (song);
         expect (! r.active() && r.start == 0 && ! r.end);
-        expectEquals (describe (r), String (u8"Sin recorte: la canción completa"));
+        expectEquals (describe (r), String (u8"Sin tramo: la canción completa"));
 
         beginTest ("start/end rules: the end must be after the start; a new start past the end drops it");
         r = withStart (r, 12.4);
@@ -37,7 +37,7 @@ struct TrimTests : UnitTest
         expect (! withEnd (r, 10.0).has_value());
         expect (! withEnd (r, 12.4).has_value());
         r = *withEnd (r, 220.0);
-        expectEquals (describe (r), String (u8"Recorte: 0:12 → 3:40"));
+        expectEquals (describe (r), String (u8"Tramo: 0:12 → 3:40"));
         expect (! withStart (r, 230.0).end.has_value());
         expectEquals (withStart (r, -3).start, 0.0);
 
@@ -77,15 +77,15 @@ struct TrimTests : UnitTest
         Array<int> fired;
         auto act = [&] (Action a) { fired.add ((int) a.kind); };
         auto menu0 = menu (cur, 75.0, act);
-        expect (item (menu0, "Sin recorte").has_value());
-        expect (item (menu0, String (u8"Empezar aquí (1:15)")).has_value());
-        expect (! item (menu0, "Quitar recorte")->isEnabled);
-        item (menu0, String (u8"Empezar aquí"))->action();
-        item (menu0, String (u8"Terminar aquí"))->action();
+        expect (item (menu0, "Sin tramo").has_value());
+        expect (item (menu0, String (u8"La canción empieza aquí (1:15)")).has_value());
+        expect (! item (menu0, String (u8"Canción completa"))->isEnabled);
+        item (menu0, String (u8"La canción empieza aquí"))->action();
+        item (menu0, String (u8"La canción termina aquí"))->action();
         expect (fired == Array<int> { Action::setStart, Action::setEnd });
         auto menu1 = menu ({ 80, std::nullopt }, 75.0, act);
-        expect (! item (menu1, String (u8"Terminar aquí"))->isEnabled); // the cursor is before the start
-        expect (item (menu1, "Quitar recorte")->isEnabled);
+        expect (! item (menu1, String (u8"La canción termina aquí"))->isEnabled); // the cursor is before the start
+        expect (item (menu1, String (u8"Canción completa"))->isEnabled);
 
         beginTest ("export with the trim: only that range is rendered");
         {

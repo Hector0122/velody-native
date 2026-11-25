@@ -15,9 +15,10 @@ struct PracticeTests : UnitTest
     {
         using namespace Metronome;
 
-        beginTest (String (u8"clamps match Electron (0.5–1.5 in 0.05 steps, ±12 semitones)"));
+        beginTest (String (u8"clamps: 0.5–1.5 at any value (to 0.1 %), ±12 semitones"));
         expectEquals (clampSpeed (0.8), 0.8);
-        expectEquals (clampSpeed (0.81), 0.8);
+        expectWithinAbsoluteError (clampSpeed (0.81), 0.81, 1e-9);
+        expectWithinAbsoluteError (clampSpeed (110.0 / 120.0), 0.917, 1e-9);
         expectEquals (clampSpeed (3), 1.5);
         expectEquals (clampSpeed (0.1), 0.5);
         expectEquals (clampSpeed (std::nan ("")), 1.0);

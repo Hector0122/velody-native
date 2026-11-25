@@ -298,12 +298,133 @@ void ClipComponent::paint (Graphics& g)
     g.drawRoundedRectangle (r, 5.0f, selected ? 2.0f : 1.0f);
     g.setColour (Theme::text.withAlpha (0.8f));
     g.setFont (Theme::body (11.0f));
-    g.drawText (clip->getName(), r.reduced (6, 2).toNearestInt(), Justification::topLeft, true);
+    auto label = clip->getName();
+    if (auto t = ClipEdit::takes (*clip); t.size() > 1)
+        label << "  (toma " << (ClipEdit::currentTake (*clip) + 1) << "/" << t.size() << ")";
+    g.drawText (label, r.reduced (6, 2).toNearestInt(), Justification::topLeft, true);
 }
 
-void ClipComponent::mouseDown (const MouseEvent&)
+void ClipComponent::mouseDown (const MouseEvent& e)
 {
     editViewState.selectionManager.selectOnly (clip.get());
+    if (e.mods.isPopupMenu())
+        return showMenu();
+    clip->edit.getUndoManager().beginNewTransaction();
+    drag = zoneAt (e.x);
+    dragStart = clip->getPosition().getStart();
+    dragEnd = clip->getPosition().getEnd();
+}
+
+double ClipComponent::secondsPerPixel() const
+{
+    auto* parent = getParentComponent();
+    const double secs = (editViewState.viewX2.get() - editViewState.viewX1.get()).inSeconds();
+    return parent != nullptr && parent->getWidth() > 0 ? secs / parent->getWidth() : 0.01;
+}
+
+ClipComponent::Drag ClipComponent::zoneAt (int x) const
+{
+    const int edge = jmin (8, getWidth() / 4);
+    return x < edge ? Drag::trimStart : x > getWidth() - edge ? Drag::trimEnd : Drag::move;
+}
+
+void ClipComponent::mouseMove (const MouseEvent& e)
+{
+    setMouseCursor (zoneAt (e.x) == Drag::move ? MouseCursor::NormalCursor : MouseCursor::LeftRightResizeCursor);
+}
+
+void ClipComponent::mouseDrag (const MouseEvent& e)
+{
+    if (drag == Drag::none || e.mods.isPopupMenu())
+        return;
+    const auto delta = te::TimeDuration::fromSeconds (e.getDistanceFromDragStartX() * secondsPerPixel());
+    if (drag == Drag::trimStart)
+        ClipEdit::trimStart (*clip, dragStart + delta);
+    else if (drag == Drag::trimEnd)
+        ClipEdit::trimEnd (*clip, dragEnd + delta);
+    else
+    {
+        // Onto the track under the mouse, if it's another one.
+        te::ClipTrack* target = nullptr;
+        if (auto* edit = findParentComponentOfClass<EditComponent>())
+            if (auto* under = edit->getComponentAt (e.getEventRelativeTo (edit).getPosition()))
+            {
+                auto* tc = dynamic_cast<TrackComponent*> (under);
+                if (tc == nullptr)
+                    tc = under->findParentComponentOfClass<TrackComponent>();
+                if (tc != nullptr)
+                    target = dynamic_cast<te::ClipTrack*> (tc->getTrack());
+            }
+        ClipEdit::move (*clip, dragStart + delta, target);
+    }
+}
+
+void ClipComponent::mouseUp (const MouseEvent&)
+{
+    drag = Drag::none;
+}
+
+void ClipComponent::showMenu()
+{
+    auto& edit = clip->edit;
+    const auto cursor = edit.getTransport().getPosition();
+    PopupMenu m;
+    m.addItem (String (u8"Cortar en el cursor  (S)"), clip->getPosition().time.contains (cursor), false, [c = clip, cursor]
+    {
+        c->edit.getUndoManager().beginNewTransaction();
+        ClipEdit::split (*c, cursor);
+    });
+    m.addItem (String (u8"Duplicar  (Ctrl+D)"), [c = clip] { c->edit.getUndoManager().beginNewTransaction(); ClipEdit::duplicate (*c); });
+    m.addItem (clip->isMuted() ? String (u8"Quitar silencio del clip") : String (u8"Silenciar el clip"), [c = clip]
+    {
+        c->edit.getUndoManager().beginNewTransaction();
+        ClipEdit::toggleMute (*c);
+    });
+    if (dynamic_cast<te::AudioClipBase*> (clip.get()) != nullptr)
+    {
+        PopupMenu fades;
+        for (double s : { 0.0, 0.05, 0.25, 1.0, 3.0 })
+            fades.addItem (s == 0 ? String ("Sin fades") : String (s, s < 1 ? 2 : 0) + " s de entrada y de salida",
+                           [c = clip, s] { c->edit.getUndoManager().beginNewTransaction(); ClipEdit::setFades (*c, s, s); });
+        m.addSubMenu ("Fades", fades);
+    }
+    m.addItem ("Repetir esta parte (bucle)", [c = clip] { ClipEdit::loopOver (c->edit, *c); });
+    auto takes = ClipEdit::takes (*clip);
+    if (takes.size() > 1)
+    {
+        PopupMenu t;
+        for (int i = 0; i < takes.size(); ++i)
+            t.addItem ("Toma " + String (i + 1), true, ClipEdit::currentTake (*clip) == i,
+                       [c = clip, i] { c->edit.getUndoManager().beginNewTransaction(); ClipEdit::chooseTake (*c, i); });
+        m.addSubMenu ("Toma (" + String (takes.size()) + " grabadas)", t);
+    }
+    m.addSeparator();
+    m.addItem ("Borrar  (Supr)", [c = clip] { c->edit.getUndoManager().beginNewTransaction(); c->removeFromParent(); });
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (this));
+}
+
+void ClipComponent::paintFades (Graphics& g)
+{
+    auto* a = dynamic_cast<te::AudioClipBase*> (clip.get());
+    if (a == nullptr)
+        return;
+    const double spp = secondsPerPixel();
+    if (spp <= 0)
+        return;
+    const float h = (float) getHeight() - 6.0f, w = (float) getWidth();
+    g.setColour (Theme::bg.withAlpha (0.45f));
+    if (const float fi = (float) (a->getFadeIn().inSeconds() / spp); fi > 1)
+    {
+        Path p;
+        p.addTriangle (0, 3, jmin (fi, w), 3, 0, 3 + h);
+        g.fillPath (p);
+    }
+    if (const float fo = (float) (a->getFadeOut().inSeconds() / spp); fo > 1)
+    {
+        Path p;
+        p.addTriangle (w, 3, w - jmin (fo, w), 3, w, 3 + h);
+        g.fillPath (p);
+    }
 }
 
 //==============================================================================
@@ -321,6 +442,13 @@ void AudioClipComponent::paint (Graphics& g)
         drawWaveform (g, *getWaveAudioClip(), *thumbnail,
                       Theme::trackColour (clip->getTrack() != nullptr ? SongEdit::audioTrackIndex (*clip->getTrack()) : 0).brighter (0.6f).withAlpha (0.85f),
                       0, getWidth(), 0, getHeight(), 0);
+
+    paintFades (g);
+    if (clip->isMuted())
+    {
+        g.setColour (Theme::bg.withAlpha (0.6f));
+        g.fillRect (getLocalBounds());
+    }
 }
 
 void AudioClipComponent::drawWaveform (Graphics& g, te::AudioClipBase& c, te::SmartThumbnail& thumb, Colour colour,
@@ -660,9 +788,15 @@ void RecordingClipComponent::updatePosition()
 TrackHeaderComponent::TrackHeaderComponent (EditViewState& evs, te::Track::Ptr t)
     : editViewState (evs), track (t)
 {
-    Helpers::addAndMakeVisible (*this, { &trackName, &armButton, &muteButton, &soloButton, &inputButton });
+    Helpers::addAndMakeVisible (*this, { &trackName, &armButton, &muteButton, &soloButton, &inputButton, &monitorButton });
+    monitorButton.setColour (TextButton::buttonOnColourId, Theme::success.darker (0.2f));
+    monitorButton.setTooltip (String (u8"Escucharte en vivo a través de los plugins de esta pista (amp sims). Con bocinas causa retroalimentación: usa audífonos."));
 
     armButton.setColour (TextButton::buttonOnColourId, Theme::record);
+    armButton.setTooltip (String (u8"Armar para grabar: al presionar Grabar, graba en esta pista"));
+    inputButton.setTooltip (String (u8"Entrada: qué entrada de tu interfaz (o teclado MIDI) graba en esta pista"));
+    muteButton.setTooltip ("Silenciar la pista");
+    soloButton.setTooltip ("Solo: escuchar solo esta pista");
     muteButton.setColour (TextButton::buttonOnColourId, Theme::mute);
     soloButton.setColour (TextButton::buttonOnColourId, Theme::solo);
     trackName.setFont (Theme::body (13.0f, true));
@@ -682,6 +816,17 @@ TrackHeaderComponent::TrackHeaderComponent (EditViewState& evs, te::Track::Ptr t
 
     if (auto at = dynamic_cast<te::AudioTrack*> (track.get()))
     {
+        monitorButton.setVisible (EngineHelpers::trackHasInput (*at));
+        monitorButton.setToggleState (EngineHelpers::isInputMonitoringEnabled (*at), dontSendNotification);
+        monitorButton.onClick = [this, at]
+        {
+            const bool on = ! EngineHelpers::isInputMonitoringEnabled (*at);
+            EngineHelpers::enableInputMonitoring (*at, on);
+            monitorButton.setToggleState (EngineHelpers::isInputMonitoringEnabled (*at), dontSendNotification);
+            if (on && VelodyUi::onMonitorOn)
+                VelodyUi::onMonitorOn();
+        };
+
         inputButton.onClick = [this, at]
         {
             PopupMenu m;
@@ -806,6 +951,8 @@ void TrackHeaderComponent::valueTreePropertyChanged (juce::ValueTree& v, const j
         {
             armButton.setEnabled (EngineHelpers::trackHasInput (*at));
             armButton.setToggleState (EngineHelpers::isTrackArmed (*at), dontSendNotification);
+            monitorButton.setVisible (EngineHelpers::trackHasInput (*at));
+            monitorButton.setToggleState (EngineHelpers::isInputMonitoringEnabled (*at), dontSendNotification);
         }
     }
 }
@@ -845,13 +992,15 @@ void TrackHeaderComponent::resized()
     r.removeFromLeft (2);
     soloButton.setBounds (r.removeFromLeft (w));
     r.removeFromLeft (2);
+    monitorButton.setBounds (r.removeFromLeft (w * 2));
 }
 
 //==============================================================================
 PluginComponent::PluginComponent (EditViewState& evs, te::Plugin::Ptr p)
     : editViewState (evs), plugin (p)
 {
-    setButtonText (plugin->getName().substring (0, 1));
+    setButtonText (plugin->getName());
+    setTooltip (plugin->getName() + String (u8" — clic para abrir su ventana"));
 }
 
 PluginComponent::~PluginComponent()
@@ -886,7 +1035,17 @@ TrackFooterComponent::TrackFooterComponent (EditViewState& evs, te::Track::Ptr t
     addButton.onClick = [this]
     {
         if (auto plugin = showMenuAndCreatePlugin (track->edit))
-            track->pluginList.insertPlugin (plugin, 0, &editViewState.selectionManager);
+        {
+            // Velody: after the instrument (if any), before the track's own volume/meter.
+            int index = 0, i = 0;
+            for (auto p : track->pluginList)
+            {
+                if (dynamic_cast<te::VolumeAndPanPlugin*> (p) != nullptr || dynamic_cast<te::LevelMeterPlugin*> (p) != nullptr)
+                    break;
+                index = ++i;
+            }
+            track->pluginList.insertPlugin (plugin, index, &editViewState.selectionManager);
+        }
     };
 }
 
@@ -931,17 +1090,13 @@ void TrackFooterComponent::mouseDown (const MouseEvent&)
 
 void TrackFooterComponent::resized()
 {
-    auto r = getLocalBounds().reduced (4);
-    const int cx = 21;
-
-    addButton.setBounds (r.removeFromLeft (cx).withSizeKeepingCentre (cx, cx));
-    r.removeFromLeft (6);
-
+    // Velody: "+ Efecto" on top, the effects by name below.
+    auto r = getLocalBounds().reduced (6, 4).withTrimmedBottom (1);
+    addButton.setBounds (r.removeFromTop (r.getHeight() / 2).withWidth (80).reduced (0, 1));
+    r.removeFromTop (2);
+    const int w = plugins.isEmpty() ? 0 : jmax (40, r.getWidth() / plugins.size());
     for (auto p : plugins)
-    {
-        p->setBounds (r.removeFromLeft (cx).withSizeKeepingCentre (cx, cx));
-        r.removeFromLeft (2);
-    }
+        p->setBounds (r.removeFromLeft (w).reduced (1, 1));
 }
 
 void TrackFooterComponent::handleAsyncUpdate()
@@ -956,6 +1111,9 @@ void TrackFooterComponent::buildPlugins()
 
     for (auto plugin : track->pluginList)
     {
+        // Velody: the track's own volume/pan, meter (and Mix Pan) are internal, not effects to show.
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (plugin) != nullptr || dynamic_cast<te::LevelMeterPlugin*> (plugin) != nullptr)
+            continue;
         auto p = new PluginComponent (editViewState, plugin);
         addAndMakeVisible (p);
         plugins.add (p);
@@ -1188,6 +1346,9 @@ EditComponent::EditComponent (te::Edit& e, te::SelectionManager& sm)
 
     addAndMakeVisible (playhead);
     addAndMakeVisible (ruler);
+    addChildComponent (trackScroll);
+    trackScroll.addListener (this);
+    trackScroll.setAutoHide (false);
 
     markAndUpdate (updateTracks);
 }
@@ -1254,12 +1415,23 @@ void EditComponent::resized()
 
     const int trackHeight = 58, trackGap = 1, rulerHeight = 26;
     const int headerWidth = editViewState.showHeaders ? 170 : 0;
-    const int footerWidth = editViewState.showFooters ? 150 : 0;
+    const int footerWidth = editViewState.showFooters ? 200 : 0;
 
     playhead.setBounds (getLocalBounds().withTrimmedLeft (headerWidth).withTrimmedRight (footerWidth));
     ruler.setBounds (headerWidth, 0, getWidth() - headerWidth - footerWidth, rulerHeight);
     ruler.toFront (false);
     playhead.toFront (false);
+
+    // Velody: vertical scrolling (viewY ≤ 0), with a scrollbar at the right of the lanes.
+    const int visible = getHeight() - rulerHeight;
+    const int content = contentHeight();
+    if (content <= visible) editViewState.viewY = 0.0;
+    else                    editViewState.viewY = jlimit ((double) (visible - content), 0.0, editViewState.viewY.get());
+    trackScroll.setRangeLimits (0.0, (double) jmax (content, visible));
+    trackScroll.setCurrentRange (-editViewState.viewY.get(), (double) visible, dontSendNotification);
+    trackScroll.setBounds (getWidth() - footerWidth - 10, rulerHeight, 10, visible);
+    trackScroll.setVisible (content > visible);
+    trackScroll.toFront (false);
 
     int y = rulerHeight + roundToInt (editViewState.viewY.get());
     for (int i = 0; i < jmin (headers.size(), tracks.size()); i++)
@@ -1345,6 +1517,15 @@ void EditComponent::buildTracks()
 void TimeRuler::paint (Graphics& g)
 {
     g.fillAll (Theme::panel);
+    // The loop range, shaded (brighter while looping is on).
+    auto& transport = edit.getTransport();
+    const auto loop = transport.getLoopRange();
+    if (loop.getLength().inSeconds() >= 0.05)
+    {
+        const int x1 = state.timeToX (loop.getStart(), getWidth()), x2 = state.timeToX (loop.getEnd(), getWidth());
+        g.setColour (Theme::accent.withAlpha (transport.looping.get() ? 0.45f : 0.15f));
+        g.fillRect (x1, 0, jmax (1, x2 - x1), getHeight());
+    }
     g.setColour (Theme::outline);
     g.fillRect (getLocalBounds().removeFromBottom (1));
     const double from = state.viewX1.get().inSeconds(), to = state.viewX2.get().inSeconds();
@@ -1372,4 +1553,34 @@ void TimeRuler::paint (Graphics& g)
 void TimeRuler::mouseDown (const MouseEvent& e)
 {
     edit.getTransport().setPosition (state.xToTime (e.x, getWidth()));
+}
+
+
+void MidiClipComponent::mouseDoubleClick (const MouseEvent&)
+{
+    if (auto* mc = getMidiClip(); mc != nullptr && VelodyUi::onEditMidiClip)
+        VelodyUi::onEditMidiClip (*mc);
+}
+
+
+int EditComponent::contentHeight() const
+{
+    return tracks.size() * (58 + 1); // trackHeight + trackGap, as laid out in resized()
+}
+
+void EditComponent::scrollTracksBy (double pixels)
+{
+    editViewState.viewY = editViewState.viewY.get() + pixels;
+    resized();
+}
+
+void EditComponent::scrollBarMoved (ScrollBar*, double newStart)
+{
+    editViewState.viewY = -newStart;
+    resized();
+}
+
+void EditComponent::mouseWheelMove (const MouseEvent&, const MouseWheelDetails& w)
+{
+    scrollTracksBy (w.deltaY * 220.0);
 }

@@ -79,8 +79,8 @@ namespace Trim
     inline String describe (const Range& r)
     {
         if (! r.active())
-            return String (u8"Sin recorte: la canción completa");
-        return "Recorte: " + clock (r.start) + String (u8" → ") + (r.end ? clock (*r.end) : String ("final"));
+            return String (u8"Sin tramo: la canción completa");
+        return "Tramo: " + clock (r.start) + String (u8" → ") + (r.end ? clock (*r.end) : String ("final"));
     }
 
     struct Action { enum Kind { setStart, setEnd, clear } kind; };
@@ -90,9 +90,11 @@ namespace Trim
     {
         PopupMenu m;
         m.addSectionHeader (describe (r));
-        m.addItem (String (u8"Empezar aquí (") + clock (songPos) + ")", [act] { act ({ Action::setStart }); });
-        m.addItem (String (u8"Terminar aquí (") + clock (songPos) + ")", songPos > r.start, false, [act] { act ({ Action::setEnd }); });
-        m.addItem ("Quitar recorte", r.active(), false, [act] { act ({ Action::clear }); });
+        m.addItem (String (u8"La canción empieza aquí (") + clock (songPos) + ")", [act] { act ({ Action::setStart }); });
+        m.addItem (String (u8"La canción termina aquí (") + clock (songPos) + ")", songPos > r.start, false, [act] { act ({ Action::setEnd }); });
+        m.addItem (String (u8"Canción completa (quitar el tramo)"), r.active(), false, [act] { act ({ Action::clear }); });
+        m.addSeparator();
+        m.addItem (String (u8"No corta el audio: solo marca desde dónde y hasta dónde suena, y qué se exporta"), false, false, nullptr);
         return m;
     }
 }

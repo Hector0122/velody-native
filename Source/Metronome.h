@@ -27,7 +27,8 @@ namespace Metronome
     inline double clampSpeed (double s)
     {
         if (! std::isfinite (s)) return 1;
-        return jlimit (0.5, 1.5, std::round (s / 0.05) * 0.05);
+        // Continuous (any target BPM, e.g. 120 → 110), kept to 0.1 % so it saves cleanly.
+        return jlimit (0.5, 1.5, std::round (s * 1000.0) / 1000.0);
     }
 
     inline int clampSemitones (double s) { return std::isfinite (s) ? jlimit (-12, 12, roundToInt (s)) : 0; }

@@ -1,6 +1,7 @@
 // Velody's copy of tracktion_engine/examples/common/Components.h (painted with Theme.h).
 #include "../Theme.h"
 #include "../SongEdit.h"
+#include "../ClipEdit.h"
 /*
     ,--.                     ,--.     ,--.  ,--.
   ,-'  '-.,--.--.,--,--.,---.|  |,-.,-'  '-.`--' ,---. ,--,--,      Copyright 2018
@@ -99,12 +100,25 @@ public:
     
     void paint (Graphics& g) override;
     void mouseDown (const MouseEvent& e) override;
+    // Velody: drag the middle to move (also to another track), the edges to trim; right-click: menu.
+    void mouseDrag (const MouseEvent& e) override;
+    void mouseUp (const MouseEvent& e) override;
+    void mouseMove (const MouseEvent& e) override;
     
     te::Clip& getClip() { return *clip; }
     
 protected:
     EditViewState& editViewState;
     te::Clip::Ptr clip;
+
+    void paintFades (Graphics&); // fade-in/out shading (audio clips)
+
+private:
+    enum class Drag { none, move, trimStart, trimEnd } drag = Drag::none;
+    te::TimePosition dragStart, dragEnd;
+    double secondsPerPixel() const;
+    Drag zoneAt (int x) const;
+    void showMenu();
 };
 
 //==============================================================================
@@ -137,6 +151,7 @@ public:
     te::MidiClip* getMidiClip() { return dynamic_cast<te::MidiClip*> (clip.get()); }
     
     void paint (Graphics& g) override;
+    void mouseDoubleClick (const MouseEvent&) override; // Velody: opens the piano roll
 };
 
 //==============================================================================
@@ -183,7 +198,8 @@ private:
     
     ValueTree inputsState;
     Label trackName;
-    TextButton armButton {"A"}, muteButton {"M"}, soloButton {"S"}, inputButton {"I"};
+    TextButton armButton {String (u8"●")}, muteButton {"M"}, soloButton {"S"}, inputButton {"In"};
+    TextButton monitorButton {"Mon"}; // Velody: hear the input through this track's plugins
 };
 
 //==============================================================================
@@ -227,7 +243,7 @@ private:
     EditViewState& editViewState;
     te::Track::Ptr track;
     
-    TextButton addButton {"+"};
+    TextButton addButton {"+ Efecto"};
     OwnedArray<PluginComponent> plugins;
     
     bool updatePlugins = false;
@@ -242,6 +258,7 @@ class TrackComponent : public Component,
 public:
     TrackComponent (EditViewState&, te::Track::Ptr);
     ~TrackComponent() override;
+    te::Track* getTrack() const { return track.get(); } // Velody: where a dragged clip lands
     
     void paint (Graphics& g) override;
     void mouseDown (const MouseEvent& e) override;
@@ -295,6 +312,13 @@ private:
 };
 
 //==============================================================================
+// Velody: called when a track's monitoring is turned on (Main warns about speakers once).
+namespace VelodyUi
+{
+    inline std::function<void()> onMonitorOn;
+    inline std::function<void (te::MidiClip&)> onEditMidiClip; // double-click on a MIDI clip
+}
+
 // Velody: seconds ruler over the lanes; a click moves the playhead there.
 class TimeRuler : public Component, private Timer
 {
@@ -312,13 +336,18 @@ private:
 class EditComponent : public Component,
                       private te::ValueTreeAllEventListener,
                       private FlaggedAsyncUpdater,
-                      private ChangeListener
+                      private ChangeListener,
+                      private ScrollBar::Listener
 {
 public:
     EditComponent (te::Edit&, te::SelectionManager&);
     ~EditComponent() override;
     
     EditViewState& getEditViewState()   { return editViewState; }
+    // Velody: the track list scrolls (wheel / scrollbar) when there are more tracks than fit.
+    void mouseWheelMove (const MouseEvent&, const MouseWheelDetails&) override;
+    void scrollTracksBy (double pixels);
+    ScrollBar trackScroll { true };
     
 private:
     void valueTreeChanged() override {}
@@ -332,6 +361,8 @@ private:
     void resized() override;
     
     void changeListenerCallback (ChangeBroadcaster*) override { repaint(); }
+    void scrollBarMoved (ScrollBar*, double newStart) override;
+    int contentHeight() const;
 
     
     void buildTracks();

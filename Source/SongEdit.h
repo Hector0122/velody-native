@@ -219,4 +219,44 @@ namespace SongEdit
     {
         return te::getAudioTracks (t.edit).indexOf (dynamic_cast<te::AudioTrack*> (&t));
     }
+
+    // Stems of the song with no clip of theirs left in the edit (a track deleted by mistake).
+    inline Array<File> missingStems (te::Edit& edit, const Array<File>& stems)
+    {
+        Array<File> missing;
+        for (auto& stem : stems)
+        {
+            bool found = false;
+            for (auto t : te::getAudioTracks (edit))
+                for (auto* c : t->getClips())
+                    if (auto* w = dynamic_cast<te::WaveAudioClip*> (c); w != nullptr && w->getOriginalFile() == stem)
+                        found = true;
+            if (! found)
+                missing.add (stem);
+        }
+        return missing;
+    }
+
+    // Puts them back, each on its own track among the song's tracks (before the inputs and the
+    // metronome), in the song's stem order. Returns how many came back.
+    inline int restoreStems (te::Edit& edit, const Array<File>& stems)
+    {
+        const auto missing = missingStems (edit, stems);
+        for (auto& stem : missing)
+        {
+            // After the last track of an earlier stem (stems keep the library's order), else at the top.
+            te::Track* preceding = nullptr;
+            const int order = stems.indexOf (stem);
+            for (auto t : te::getAudioTracks (edit))
+                for (int k = 0; k < order; ++k)
+                    if (t->getName() == stems[k].getFileNameWithoutExtension())
+                        preceding = t;
+            if (auto t = edit.insertNewAudioTrack (te::TrackInsertPoint (nullptr, preceding), nullptr))
+            {
+                t->setName (stem.getFileNameWithoutExtension());
+                insertWholeFile (*t, stem);
+            }
+        }
+        return missing.size();
+    }
 }

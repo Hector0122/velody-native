@@ -2,7 +2,7 @@
 Type=Application
 Name=Velody (nativo)
 Comment=Practica sobre stems separados, graba y usa plugins
-Exec=velody-native
+Exec=sh -c 'if command -v pw-jack >/dev/null; then exec pw-jack velody-native; else exec velody-native; fi'
 Icon=velody-native
 Categories=AudioVideo;Audio;Music;
 Terminal=false

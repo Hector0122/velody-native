@@ -28,7 +28,7 @@ struct PracticeMetaTests : UnitTest
         write (R"({"practiceSpeed":0.83,"transposeSemitones":-20,"playbackCountInBars":4,"updatedAt":5})");
         edit.setProperty (speedProp, 1.2, nullptr);
         v = load (dir, edit);
-        expectWithinAbsoluteError (v.speed, 0.85, 1e-9);
+        expectWithinAbsoluteError (v.speed, 0.83, 1e-9); // any speed now (no 5 % steps)
         expectEquals (v.semitones, -12);
         expectEquals (v.countInBars, 4);
         expectEquals ((int) meta()["updatedAt"], 5); // nothing moved

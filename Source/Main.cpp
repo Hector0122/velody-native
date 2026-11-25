@@ -20,6 +20,11 @@
 #include "Updater.h"
 #include "PluginPaths.h"
 #include "Projects.h"
+#include "LiveMonitoring.h"
+#include "Instruments.h"
+#include "ui/PianoRoll.h"
+#include "ui/CountInOverlay.h"
+#include "SongKey.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -43,8 +48,8 @@ public:
     MainComponent()
     {
         Helpers::addAndMakeVisible (*this, { &wordmark, &songTitleLabel, &songInfo, &songsButton, &projectsButton, &importButton, &exportButton, &settingsButton,
-                                             &startButton, &playButton, &recordButton, &timeLabel, &chordDisplay, &trimButton, &clickButton, &newTrackButton, &deleteButton,
-                                             &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &startButton, &playButton, &recordButton, &timeLabel, &chordDisplay, &trimButton, &loopButton, &clickButton, &newTrackButton, &deleteButton,
+                                             &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedDown, &speedValue, &speedUp, &pitchLabel, &pitchDown, &pitchValue, &pitchUp,
                                              &mixerToggle, &status, &mixer });
 
         // Header: wordmark, the open song (title + BPM/trim/speed), the menus.
@@ -53,6 +58,9 @@ public:
         songInfo.setColour (Label::textColourId, Theme::muted);
         settingsButton.onClick = [this] { showSettingsMenu(); };
         projectsButton.onClick = [this] { showProjectsMenu(); };
+        loopButton.setTooltip (String (u8"Repetir una parte: para practicarla, o para grabar varias tomas seguidas (L)"));
+        loopButton.setColour (TextButton::buttonOnColourId, Theme::accent);
+        loopButton.onClick = [this] { showLoopMenu(); };
         clickButton.setClickingTogglesState (true);
         clickButton.setTooltip (String (u8"Metrónomo del proyecto (al tempo del proyecto)"));
         clickButton.onClick = [this] { if (edit != nullptr) edit->clickTrackEnabled = clickButton.getToggleState(); };
@@ -80,12 +88,24 @@ public:
 
         speedLabel.setText ("Velocidad", dontSendNotification);
         pitchLabel.setText ("Tono", dontSendNotification);
-        speedSlider.setRange (50, 150, 5);
+        speedSlider.setRange (50, 150, 0.1);
         speedSlider.setTextValueSuffix (" %");
         speedSlider.setDoubleClickReturnValue (true, 100);
         pitchSlider.setRange (-12, 12, 1);
         pitchSlider.setTextValueSuffix (" st");
         pitchSlider.setDoubleClickReturnValue (true, 0);
+        // Speed as the song's BPM and pitch as its key, with −/+ (the sliders hold the values, unseen).
+        // −/+ move 1 BPM (1 % without a tempo); the value: original tempo, or type one (e.g. 120 → 110).
+        speedDown.onClick = [this] { stepTempo (-1); };
+        speedUp.onClick   = [this] { stepTempo (+1); };
+        speedValue.onClick = [this] { showTempoMenu(); };
+        pitchDown.onClick = [this] { pitchSlider.setValue (pitchSlider.getValue() - 1, sendNotificationSync); };
+        pitchUp.onClick   = [this] { pitchSlider.setValue (pitchSlider.getValue() + 1, sendNotificationSync); };
+        pitchValue.onClick = [this] { pitchSlider.setValue (0, sendNotificationSync); };
+        speedValue.setTooltip (String (u8"Tempo de práctica: − / + de 1 en 1 BPM; clic para escribir un tempo o volver al original"));
+        pitchValue.setTooltip (String (u8"Tonalidad (estimada de los acordes). Clic: tono original"));
+        for (auto* b : { &speedValue, &pitchValue })
+            b->setColour (TextButton::buttonColourId, Theme::lane);
         for (auto* sl : { &speedSlider, &pitchSlider })
         {
             sl->setTextBoxStyle (Slider::TextBoxRight, false, 60, 22);
@@ -138,7 +158,7 @@ public:
         exportButton.onClick = [this] { showExportMenu(); };
         startButton.setTooltip (String (u8"Ir a donde empieza la música (o el inicio del recorte)"));
         startButton.onClick = [this] { goToMusicStart(); };
-        trimButton.setTooltip (String (u8"Recorte: dónde empieza y termina la canción para ti (se salta una intro larga); se guarda en la canción"));
+        trimButton.setTooltip (String (u8"Tramo: marca dónde empieza y dónde termina la canción para ti (para saltarte una intro larga). No corta el audio; se guarda en la canción"));
         trimButton.onClick = [this] { showTrimMenu(); };
         // The trim's end: playback stops there.
         trimTimer.fn = [this]
@@ -149,6 +169,9 @@ public:
             lastTrimCheck = pos;
             if (stop)
                 stopPlayback();
+            // The count-in, big on screen while it plays.
+            const bool counting = countIn != nullptr && countIn->isArmed() && t.isPlaying();
+            countInOverlay.show (counting ? CountInDisplay::at (countInClicks, t.getPosition().inSeconds(), countInFrom) : CountInDisplay::State());
             timeLabel.setText (Trim::clock (jmax (0.0, pos)) + "." + String ((int) (jmax (0.0, pos) * 10) % 10)
                                    + (songLength > 0 ? "  /  " + Trim::clock (songLength) : String()), dontSendNotification);
         };
@@ -156,13 +179,8 @@ public:
         chordDisplay.songTime = [this] { return edit != nullptr ? edit->getTransport().getPosition().inSeconds() * speed() : 0.0; };
         playButton.onClick = [this] { stopOrPlay (false); };
         recordButton.onClick = [this] { stopOrPlay (true); };
-        newTrackButton.onClick = [this]
-        {
-            edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1);
-            SongEdit::setMixPan (*edit, mixPanPreference());
-            mixer.rebuild();
-            resized();
-        };
+        newTrackButton.onClick = [this] { showNewTrackMenu(); };
+        VelodyUi::onEditMidiClip = [this] (te::MidiClip& c) { showPianoRoll (c); };
         mixer.onMixPanChanged = [this] (float pan) { settings.setValue ("mixPan", pan); };
         deleteButton.onClick = [this] { deleteSelection(); };
 
@@ -170,6 +188,20 @@ public:
         cloud.cleanupStaleDownloads(); // a download cut off by a crash or quit
 
         PluginPaths::addToScanPaths (engine.getPropertyStorage().getPropertiesFile(), PluginPaths::atStart());
+        // First run: JACK (PipeWire) when it's there, for low latency; the choice is then the user's.
+        if (! settings.getBoolValue ("audioTypeChosen", false)
+            && LiveMonitoring::preferJack (engine.getDeviceManager().deviceManager))
+            settings.setValue ("audioTypeChosen", true); // until JACK could be chosen, it's tried at each start
+        VelodyUi::onMonitorOn = [this]
+        {
+            if (settings.getBoolValue ("monitorWarned", false))
+                return;
+            settings.setValue ("monitorWarned", true);
+            AlertWindow::showMessageBoxAsync (MessageBoxIconType::InfoIcon, String (u8"Monitoreo en vivo"),
+                String (u8"Ahora te escuchas a través de los plugins de esta pista (pon ahí tu amp sim con el «+» del final de la pista).\n\n"
+                        u8"Usa audífonos: con bocinas el micrófono o la guitarra se retroalimentan.\n"
+                        u8"Para tocar cómodo baja el buffer en Ajustes → Latencia (128 o 64)."));
+        };
         engine.getPluginManager().createBuiltInType<CountInPlugin>(); // before any edit that has one loads
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
@@ -177,6 +209,7 @@ public:
         Projects::migrateLegacy (projectsDir());
         openLast();
         setWantsKeyboardFocus (true); // Ctrl+F
+        addChildComponent (countInOverlay);
 
         addChildComponent (updateButton);
         updateButton.setColour (TextButton::buttonColourId, Theme::success.darker (0.3f));
@@ -191,6 +224,9 @@ public:
         analysis = nullptr; // before the queue: it asks the queue whether it's busy
         imports = nullptr; // SIGTERMs separate.py so Demucs and its temp files don't outlive the app
         engine.getDeviceManager().removeChangeListener (this);
+        VelodyUi::onMonitorOn = nullptr;
+        if (forcedQuantum)
+            LiveMonitoring::releaseBuffer(); // PipeWire's buffer back to automatic for the other apps
         save();
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
     }
@@ -251,7 +287,7 @@ public:
         transport.removeFromLeft (16);
         timeLabel.setBounds (transport.removeFromLeft (210).reduced (0, 6));
         transport.removeFromLeft (12);
-        for (auto* b : { &deleteButton, &newTrackButton, &trimButton, &clickButton })
+        for (auto* b : { &deleteButton, &newTrackButton, &trimButton, &loopButton, &clickButton })
             if (b->isVisible())
                 b->setBounds (transport.removeFromRight (104).withSizeKeepingCentre (98, 34));
         chordDisplay.setBounds (transport.reduced (16, 4));
@@ -261,11 +297,15 @@ public:
         countInBox.setBounds (practice.removeFromLeft (170).reduced (3, 0));
         recordCountInBox.setBounds (practice.removeFromLeft (220).reduced (3, 0));
         soundBox.setBounds (practice.removeFromLeft (130).reduced (3, 0));
-        const int sliderW = jmax (120, (practice.getWidth() - 180) / 2);
-        speedLabel.setBounds (practice.removeFromLeft (90));
-        speedSlider.setBounds (practice.removeFromLeft (sliderW));
-        pitchLabel.setBounds (practice.removeFromLeft (60));
-        pitchSlider.setBounds (practice.removeFromLeft (sliderW));
+        auto stepper = [&] (Label& label, TextButton& down, TextButton& value, TextButton& up, int valueW)
+        {
+            label.setBounds (practice.removeFromLeft (84));
+            down.setBounds (practice.removeFromLeft (32).reduced (2, 0));
+            value.setBounds (practice.removeFromLeft (valueW).reduced (2, 0));
+            up.setBounds (practice.removeFromLeft (32).reduced (2, 0));
+        };
+        stepper (speedLabel, speedDown, speedValue, speedUp, 170);
+        stepper (pitchLabel, pitchDown, pitchValue, pitchUp, 170);
 
         // Bottom: status bar, then the mixer (folds away) with its bar.
         status.setBounds (r.removeFromBottom (statusH).reduced (16, 0));
@@ -276,6 +316,8 @@ public:
         mixerToggle.setBounds (mixerBarArea.reduced (12, 3).removeFromLeft (120));
         if (editComponent != nullptr)
             editComponent->setBounds (r);
+        countInOverlay.setBounds (r);
+        countInOverlay.toFront (false);
     }
 
 private:
@@ -287,7 +329,7 @@ private:
     Theme::IconButton songsButton { "Canciones", Theme::Icon::songs }, projectsButton { "Proyectos", Theme::Icon::projects },
                       importButton { "Importar", Theme::Icon::import },
                       exportButton { "Exportar", Theme::Icon::exportIcon }, settingsButton { "Ajustes", Theme::Icon::settings };
-    TextButton newTrackButton { "+ Pista" }, deleteButton { "Borrar" }, mixerToggle, clickButton { "Click" };
+    TextButton newTrackButton { "+ Pista" }, deleteButton { "Borrar" }, mixerToggle, clickButton { "Click" }, loopButton { "Bucle" };
     TransportButton playButton { TransportButton::Kind::play, "Play" }, recordButton { TransportButton::Kind::record, "Grabar" },
                     startButton { TransportButton::Kind::start, "Inicio" };
     Label status, songTitleLabel, songInfo, timeLabel;
@@ -429,6 +471,16 @@ private:
         PopupMenu m;
         m.addItem (String (u8"Interfaz de audio…"), [this] { EngineHelpers::showAudioDeviceSettings (engine); });
         m.addItem (String (u8"Plugins (VST3 / LV2)…"), [this] { showPluginScanner(); });
+        // Latency: the buffer (PipeWire's quantum under JACK), with the round trip it gives.
+        auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
+        const double rate = dev != nullptr ? dev->getCurrentSampleRate() : 48000.0;
+        const int current = dev != nullptr ? dev->getCurrentBufferSizeSamples() : 0;
+        PopupMenu latency;
+        for (int b : LiveMonitoring::buffers)
+            latency.addItem (String (b) + " muestras  (~" + String (LiveMonitoring::roundTripMs (b, rate), 1) + " ms)"
+                                 + (b <= 128 ? String (u8"  — para tocar en vivo") : String()),
+                             true, b == current, [this, b] { setBuffer (b); });
+        m.addSubMenu ("Latencia (buffer)", latency);
         m.addSeparator();
         m.addItem (String (u8"Nube…"), [this] { showCloudSettings(); });
         m.addItem (String (u8"Vibes…"), [this] { showVibesSettings(); });
@@ -436,6 +488,92 @@ private:
         m.addSeparator();
         m.addItem ("Abrir la carpeta de proyectos y grabaciones", [] { projectsDir().revealToUser(); });
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (settingsButton));
+    }
+
+    // "+ Pista": audio, an instrument (your synths + the built-in 4OSC), or an empty MIDI clip to draw in.
+    void showNewTrackMenu()
+    {
+        PopupMenu m;
+        m.addItem ("Pista de audio", [this]
+        {
+            edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 1);
+            SongEdit::setMixPan (*edit, mixPanPreference());
+            mixer.rebuild();
+            resized();
+        });
+        PopupMenu instruments;
+        for (auto& choice : Instruments::available (engine))
+            instruments.addItem (choice.name, [this, choice] { addInstrument (choice); });
+        if (Instruments::available (engine).size() == 1)
+            instruments.addItem (String (u8"¿Falta tu sintetizador? Escanea en Ajustes → Plugins"), false, false, nullptr);
+        m.addSubMenu ("Pista de instrumento (MIDI)", instruments);
+        auto* target = instrumentTrackForClip();
+        m.addItem (String (u8"Clip MIDI vacío (4 compases) para dibujar notas"), target != nullptr, false, [this]
+        {
+            if (auto* t = instrumentTrackForClip())
+                if (auto clip = Instruments::addEmptyClip (*t, edit->getTransport().getPosition()))
+                    showPianoRoll (*clip);
+        });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (newTrackButton));
+    }
+
+    // The selected instrument track, else the first one.
+    te::AudioTrack* instrumentTrackForClip()
+    {
+        if (auto* sel = dynamic_cast<te::AudioTrack*> (selectionManager.getSelectedObject (0)); sel != nullptr && Instruments::isInstrumentTrack (*sel))
+            return sel;
+        for (auto t : te::getAudioTracks (*edit))
+            if (Instruments::isInstrumentTrack (*t))
+                return t;
+        return nullptr;
+    }
+
+    void addInstrument (const Instruments::Choice& choice)
+    {
+        auto* t = Instruments::addInstrumentTrack (*edit, choice);
+        if (t == nullptr)
+            return;
+        SongEdit::setMixPan (*edit, mixPanPreference());
+        midiToTrack (*t);
+        selectionManager.selectOnly (t);
+        mixer.rebuild();
+        resized();
+        status.setText ("Pista de instrumento: " + t->getName() + String (u8" — toca tu teclado MIDI, o «+ Pista → Clip MIDI vacío» para dibujar notas"),
+                        dontSendNotification);
+    }
+
+    void midiToTrack (te::AudioTrack& t)
+    {
+        Instruments::enableMidiInputs (engine.getDeviceManager());
+        edit->getTransport().ensureContextAllocated();
+        Instruments::routeMidiInputs (*edit, t);
+        edit->restartPlayback();
+    }
+
+    void showPianoRoll (te::MidiClip& clip)
+    {
+        DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Notas: " + (clip.getTrack() != nullptr ? clip.getTrack()->getName() : String ("MIDI"));
+        o.dialogBackgroundColour = Theme::panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = true;
+        o.resizable = true;
+        o.content.setOwned (new PianoRoll::Panel (clip));
+        o.componentToCentreAround = this;
+        o.launchAsync();
+    }
+
+    bool forcedQuantum = false;
+
+    void setBuffer (int buffer)
+    {
+        auto& dm = engine.getDeviceManager().deviceManager;
+        auto error = LiveMonitoring::setBuffer (dm, buffer);
+        if (error.isNotEmpty())
+            return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Latencia", error);
+        forcedQuantum |= LiveMonitoring::isJack (dm.getCurrentAudioDeviceType());
+        // PipeWire applies the new quantum to the running device a moment later.
+        Timer::callAfterDelay (600, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->refreshButtons(); });
     }
 
     // Header subtitle: tempo, trim, practice speed/pitch.
@@ -454,7 +592,7 @@ private:
         {
             parts.add (songMeta.bpm > 0 ? String (roundToInt (songMeta.bpm)) + " BPM" : (analysingOpenSong ? String (u8"analizando…") : String ("sin tempo")));
             if (trim.active())
-                parts.add (Trim::describe (trim).replace ("Recorte: ", "recorte "));
+                parts.add (Trim::describe (trim).replace ("Tramo: ", "tramo "));
             if (speed() != 1.0)
                 parts.add (String (roundToInt (speed() * 100)) + " %");
             if (semitones() != 0)
@@ -471,7 +609,7 @@ private:
     // The trim's start when there is one, else where the music starts (leading silence skipped).
     void goToMusicStart() { edit->getTransport().setPosition (te::TimePosition::fromSeconds ((trim.start > 0 ? trim.start : musicStart) / speed())); }
 
-    TextButton trimButton { "Recorte" };
+    TextButton trimButton { "Tramo" };
     double lastTrimCheck = 0;
     Trim::Range trim;
 
@@ -497,7 +635,7 @@ private:
 
     void refreshTrimButton()
     {
-        trimButton.setButtonText (trim.active() ? String (u8"Recorte ✓") : String ("Recorte"));
+        trimButton.setButtonText (trim.active() ? String (u8"Tramo ✓") : String ("Tramo"));
         trimButton.setEnabled (currentSong.has_value());
     }
     std::optional<Library::Song> currentSong;
@@ -509,7 +647,7 @@ private:
         PropertiesFile::Options o;
         o.applicationName = "Velody";
         o.filenameSuffix = "settings";
-        o.folderName = "Velody";
+        o.folderName = ".config/Velody"; // JUCE puts folderName under ~ on Linux
         return o;
     }() };
 
@@ -533,7 +671,67 @@ private:
         }
     }
     Label speedLabel, pitchLabel;
-    Slider speedSlider, pitchSlider;
+    Slider speedSlider, pitchSlider; // the values (not shown); the BPM/key steppers below move them
+    TextButton speedDown { String (u8"−") }, speedUp { "+" }, speedValue, pitchDown { String (u8"−") }, pitchUp { "+" }, pitchValue;
+    SongKey::Key songKey;
+
+    // A target tempo in BPM → the practice speed (song tempo × speed = target).
+    void setTempo (double targetBpm)
+    {
+        if (songMeta.bpm > 0)
+            speedSlider.setValue (100.0 * Metronome::clampSpeed (targetBpm / songMeta.bpm), sendNotificationSync);
+    }
+
+    void stepTempo (int step)
+    {
+        if (songMeta.bpm > 0)
+            setTempo (std::round (songMeta.bpm * speed()) + step);
+        else
+            speedSlider.setValue (speedSlider.getValue() + step, sendNotificationSync);
+    }
+
+    void showTempoMenu()
+    {
+        PopupMenu m;
+        m.addItem (songMeta.bpm > 0 ? "Tempo original (" + String (roundToInt (songMeta.bpm)) + " BPM)" : String ("Velocidad original (100 %)"),
+                   [this] { speedSlider.setValue (100, sendNotificationSync); });
+        m.addItem (songMeta.bpm > 0 ? String (u8"Escribir el tempo…") : String (u8"Escribir la velocidad (%)…"), [this] { askTempo(); });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (speedValue));
+    }
+
+    void askTempo()
+    {
+        const bool bpm = songMeta.bpm > 0;
+        projectDialog = std::make_unique<AlertWindow> (bpm ? "Tempo" : "Velocidad",
+            bpm ? "BPM para practicar (original " + String (roundToInt (songMeta.bpm)) + ", de " + String (roundToInt (songMeta.bpm * 0.5)) + " a "
+                      + String (roundToInt (songMeta.bpm * 1.5)) + "):"
+                : String (u8"Porcentaje (50 a 150):"),
+            MessageBoxIconType::NoIcon);
+        projectDialog->addTextEditor ("v", bpm ? String (roundToInt (songMeta.bpm * speed())) : String (roundToInt (speed() * 100)));
+        projectDialog->addButton ("Aplicar", 1, KeyPress (KeyPress::returnKey));
+        projectDialog->addButton ("Cancelar", 0, KeyPress (KeyPress::escapeKey));
+        projectDialog->enterModalState (true, ModalCallbackFunction::create ([this, bpm] (int r)
+        {
+            const double v = projectDialog->getTextEditorContents ("v").getDoubleValue();
+            projectDialog = nullptr;
+            if (r != 1 || v <= 0)
+                return;
+            if (bpm) setTempo (v);
+            else     speedSlider.setValue (jlimit (50.0, 150.0, v), sendNotificationSync);
+        }), false);
+    }
+
+    void refreshPracticeControls()
+    {
+        const bool on = currentSong.has_value();
+        for (auto* b : { &speedDown, &speedUp, &speedValue, &pitchDown, &pitchUp, &pitchValue })
+            b->setEnabled (on);
+        const double pct = speed() * 100;
+        const String pctText = std::abs (pct - std::round (pct)) < 0.05 ? String (roundToInt (pct)) : String (pct, 1);
+        speedValue.setButtonText (songMeta.bpm > 0 ? String (roundToInt (songMeta.bpm * speed())) + " BPM  (" + pctText + " %)"
+                                                   : pctText + " %");
+        pitchValue.setButtonText (SongKey::describe (songKey, semitones()));
+    }
     double appliedSpeed = 1;
     MixerPanel mixer;
 
@@ -600,6 +798,8 @@ private:
         songMeta = Metronome::readMeta (currentSong->dir);
         countInBox.setEnabled (songMeta.bpm > 0);
         chordDisplay.setChords (songMeta.chords);
+        songKey = SongKey::estimate (songMeta.chords);
+        refreshPracticeControls();
         refreshClickTrack();
         status.setText (String (u8"Análisis listo: metrónomo, count-in y acordes"), dontSendNotification);
     }
@@ -856,6 +1056,8 @@ private:
         pitchSlider.setValue (practice.semitones, dontSendNotification);
         speedSlider.setEnabled (song != nullptr);
         pitchSlider.setEnabled (song != nullptr);
+        songKey = SongKey::estimate (songMeta.chords);
+        refreshPracticeControls();
         refreshClickTrack(); // also applies the speed/pitch to the new click clip
         applyPractice();
 
@@ -887,6 +1089,7 @@ private:
         editComponent = std::make_unique<EditComponent> (*edit, selectionManager);
         editComponent->getEditViewState().showFooters = true; // footer = plugin chain with "+" button
         editComponent->getEditViewState().showWaveDevices = true;
+        editComponent->getEditViewState().showMidiDevices = true;
         addAndMakeVisible (*editComponent);
         fitViewToSong();
         SongEdit::setMixPan (*edit, mixPanPreference());
@@ -922,6 +1125,25 @@ private:
         listing = l;
         auto m = CloudUi::songsMenu (l, currentSong.has_value() ? currentSong->name : String(), cloud.busy(), imports->pending() > 0,
                                      Library::defaultRoot(), [this] (const CloudUi::Action& a) { songAction (a); });
+        // A stem track deleted by mistake: put the song's tracks back.
+        if (currentSong.has_value())
+            if (const auto missing = SongEdit::missingStems (*edit, currentSong->stems); ! missing.isEmpty())
+            {
+                StringArray names;
+                for (auto& f : missing)
+                    names.add (f.getFileNameWithoutExtension());
+                m.addSeparator();
+                m.addItem (String (u8"Restaurar las pistas de la canción (") + names.joinIntoString (", ") + ")", [this]
+                {
+                    if (! currentSong.has_value())
+                        return;
+                    edit->getUndoManager().beginNewTransaction();
+                    const int n = SongEdit::restoreStems (*edit, currentSong->stems);
+                    SongEdit::setMixPan (*edit, mixPanPreference());
+                    refreshAfterEdit();
+                    status.setText (String (n) + (n == 1 ? String (u8" pista restaurada") : String (u8" pistas restauradas")), dontSendNotification);
+                });
+            }
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (songsButton));
     }
 
@@ -1014,7 +1236,7 @@ private:
                               if (error.isNotEmpty())
                                   return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "No se pudo actualizar", error);
                               // The new files are in /usr now: start them once this one has closed (and saved).
-                              std::system ("setsid sh -c 'sleep 2; exec /usr/bin/velody-native' >/dev/null 2>&1 &");
+                              std::system ("setsid sh -c 'sleep 2; if command -v pw-jack >/dev/null; then exec pw-jack /usr/bin/velody-native; else exec /usr/bin/velody-native; fi' >/dev/null 2>&1 &");
                               JUCEApplication::getInstance()->systemRequestedQuit();
                           },
                           [this] (int pct)
@@ -1025,11 +1247,96 @@ private:
                           });
     }
 
+    // Shortcuts (REAPER-like where it makes sense).
     bool keyPressed (const KeyPress& k) override
     {
-        if (k == KeyPress ('f', ModifierKeys::commandModifier, 0))
-            return showSearch(), true;
+        const auto cmd = ModifierKeys::commandModifier, shift = ModifierKeys::shiftModifier;
+        if (k == KeyPress ('f', cmd, 0))                   return showSearch(), true;
+        if (edit == nullptr)                               return false;
+        if (k == KeyPress (KeyPress::spaceKey))            return stopOrPlay (false), true;
+        if (k == KeyPress ('s', 0, 0))                     return splitAtCursor(), true;
+        if (k == KeyPress ('d', cmd, 0))                   return duplicateSelected(), true;
+        if (k == KeyPress ('l', 0, 0))                     return toggleLoop(), true;
+        if (k == KeyPress::deleteKey || k == KeyPress::backspaceKey)
+            return deleteSelection(), true;
+        if (k == KeyPress ('z', cmd, 0))                   return edit->getUndoManager().undo(), refreshAfterEdit(), true;
+        if (k == KeyPress ('z', cmd | shift, 0) || k == KeyPress ('y', cmd, 0))
+            return edit->getUndoManager().redo(), refreshAfterEdit(), true;
         return false;
+    }
+
+    void refreshAfterEdit()
+    {
+        mixer.rebuild();
+        resized();
+        refreshButtons();
+    }
+
+    Array<te::Clip*> selectedClips()
+    {
+        Array<te::Clip*> out;
+        for (auto* o : selectionManager.getSelectedObjects())
+            if (auto* c = dynamic_cast<te::Clip*> (o))
+                out.add (c);
+        return out;
+    }
+
+    void splitAtCursor()
+    {
+        Array<te::Track*> tracks;
+        for (auto* o : selectionManager.getSelectedObjects())
+            if (auto* t = dynamic_cast<te::Track*> (o))
+                tracks.add (t);
+        const auto n = ClipEdit::splitAt (*edit, selectedClips(), tracks, edit->getTransport().getPosition());
+        status.setText (n > 0 ? String (u8"Cortado en el cursor") : String (u8"Para cortar: selecciona un clip (o una pista) y pon el cursor sobre él"), dontSendNotification);
+    }
+
+    void duplicateSelected()
+    {
+        edit->getUndoManager().beginNewTransaction();
+        for (auto* c : selectedClips())
+            ClipEdit::duplicate (*c);
+    }
+
+    void toggleLoop()
+    {
+        auto& t = edit->getTransport();
+        if (! t.looping && t.getLoopRange().getLength().inSeconds() < 0.05)
+            return status.setText (String (u8"Primero marca la parte: Bucle → inicio y fin, o clic derecho en un clip → Repetir esta parte"), dontSendNotification);
+        t.looping = ! t.looping.get();
+        refreshButtons();
+    }
+
+    void showLoopMenu()
+    {
+        auto& t = edit->getTransport();
+        const auto cursor = t.getPosition();
+        const auto range = t.getLoopRange();
+        PopupMenu m;
+        m.addItem ("Bucle activado  (L)", range.getLength().inSeconds() >= 0.05, t.looping.get(), [this] { toggleLoop(); });
+        m.addSeparator();
+        m.addItem (String (u8"Inicio del bucle aquí (") + Trim::clock (cursor.inSeconds() * speed()) + ")", [this, cursor]
+        {
+            auto& tr = edit->getTransport();
+            const auto end = tr.getLoopRange().getEnd() > cursor ? tr.getLoopRange().getEnd() : cursor + te::TimeDuration::fromSeconds (8.0);
+            ClipEdit::loopBetween (*edit, cursor, end);
+            refreshButtons();
+        });
+        m.addItem (String (u8"Fin del bucle aquí (") + Trim::clock (cursor.inSeconds() * speed()) + ")", cursor > range.getStart(), false, [this, cursor]
+        {
+            ClipEdit::loopBetween (*edit, edit->getTransport().getLoopRange().getStart(), cursor);
+            refreshButtons();
+        });
+        auto clips = selectedClips();
+        m.addItem ("Repetir el clip seleccionado", ! clips.isEmpty(), false, [this, c = clips.isEmpty() ? nullptr : clips[0]]
+        {
+            if (c != nullptr)
+                ClipEdit::loopOver (*edit, *c);
+            refreshButtons();
+        });
+        m.addSeparator();
+        m.addItem (String (u8"Grabar con el bucle activo deja varias tomas en un clip: clic derecho en él → Toma"), false, false, nullptr);
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (loopButton));
     }
 
     void songAction (const CloudUi::Action& a)
@@ -1229,7 +1536,8 @@ private:
         const bool wasRecording = t.isRecording();
 
         if (record)
-            wasRecording ? EngineHelpers::toggleRecord (*edit) : recordWithCountIn();
+            // Grabar again stops and KEEPS the take (the examples' toggleRecord discarded it: stop (true, …)).
+            wasRecording ? stopRecordingKeepingTake() : recordWithCountIn();
         else if (t.isPlaying())
             stopPlayback();
         else
@@ -1237,6 +1545,12 @@ private:
 
         if (wasRecording)
             save(); // keep the new take on disk right away
+    }
+
+    void stopRecordingKeepingTake()
+    {
+        edit->getTransport().stop (false, false); // discardRecordings = false
+        endCountInRecording();
     }
 
     ComboBox recordCountInBox;
@@ -1255,11 +1569,12 @@ private:
             // A project (no song grid): Tracktion's own count-in, at the project's tempo.
             if (! currentSong.has_value())
                 edit->setCountInMode (Projects::countInFor (RecordCountIn::barsOptions[jmax (0, recordCountInBox.getSelectedItemIndex())]));
-            return EngineHelpers::toggleRecord (*edit);
+            return edit->getTransport().record (false);
         }
 
         countInFrom = plan.punchIn;
         countIn->arm (plan.clicks, countInFrom, clickSound());
+        countInClicks = plan.clicks;
         loopBeforeRecord = t.getLoopRange();
         t.looping = false; // Tracktion records in loop mode or punch mode, not both
         t.setLoopRange ({ te::TimePosition::fromSeconds (plan.punchIn), te::TimePosition::fromSeconds (plan.punchIn + 24 * 3600.0) });
@@ -1315,6 +1630,7 @@ private:
         {
             countInFrom = t.getPosition().inSeconds();
             countIn->arm (clicks, countInFrom, clickSound());
+            countInClicks = clicks;
 
             // The transport only allows negative positions down to its own count-in length (2 bars at
             // the edit's 120 bpm + 0.5 s = -4.5 s), so set that just for this jump.
@@ -1329,6 +1645,8 @@ private:
     }
 
     double countInFrom = 0;
+    std::vector<Metronome::Click> countInClicks; // the count-in being played, for the big countdown
+    CountInDisplay::Overlay countInOverlay;
 
     double speed() const { return Metronome::clampSpeed (speedSlider.getValue() / 100.0); }
     int semitones() const { return Metronome::clampSemitones (pitchSlider.getValue()); }
@@ -1346,6 +1664,7 @@ private:
         t.setPosition (te::TimePosition::fromSeconds (songPos / speed()));
         appliedSpeed = speed();
         fitViewToSong(); // the song got longer/shorter
+        refreshPracticeControls();
         songLength = currentSong.has_value() ? SongEdit::contentLength (*edit) * speed() : 0.0;
         refreshButtons();
     }
@@ -1394,6 +1713,15 @@ private:
                     instance->setRecordingEnabled (t->itemID, true);
                 }
 
+        // MIDI keyboards: on, and into the first instrument track (or the one picked later).
+        Instruments::enableMidiInputs (engine.getDeviceManager());
+        for (auto t : te::getAudioTracks (*edit))
+            if (Instruments::isInstrumentTrack (*t))
+            {
+                Instruments::routeMidiInputs (*edit, *t);
+                break;
+            }
+
         SongEdit::setMixPan (*edit, mixPanPreference()); // input tracks created just now get it too
         mixer.rebuild();
         edit->restartPlayback();
@@ -1431,6 +1759,7 @@ private:
         auto& t = edit->getTransport();
         playButton.setActive (t.isPlaying() && ! t.isRecording());
         recordButton.setActive (t.isRecording());
+        loopButton.setToggleState (t.looping.get(), dontSendNotification);
         refreshSongInfo();
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
@@ -1438,7 +1767,7 @@ private:
             status.setText (String (u8"Analizando tempo y acordes de esta canción…"), dontSendNotification);
         else if (imports->pending() == 0 && exporter == nullptr && ! cloud.busy()) // while importing/exporting/syncing, the status shows the progress instead
             status.setText (dev == nullptr ? "Sin interfaz de audio"
-                                           : dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
+                                           : dev->getTypeName() + ": " + dev->getName() + "  |  " + String (dev->getCurrentSampleRate(), 0) + " Hz  |  "
                                              + String (dev->getCurrentBufferSizeSamples()) + " muestras  |  latencia "
                                              + String (1000.0 * (dev->getInputLatencyInSamples() + dev->getOutputLatencyInSamples())
                                                        / jmax (1.0, dev->getCurrentSampleRate()), 1) + " ms",
@@ -1453,6 +1782,19 @@ private:
     {
         if (source == &engine.getDeviceManager())
             assignInputsToTracks(); // interface or channel changed in the Audio dialog
+        else if (source == &selectionManager)
+        {
+            // Selecting an instrument track (or one of its clips) sends the MIDI keyboard there.
+            te::AudioTrack* t = nullptr;
+            if (auto* sel = selectionManager.getSelectedObject (0))
+            {
+                if (auto* at = dynamic_cast<te::AudioTrack*> (sel)) t = at;
+                else if (auto* c = dynamic_cast<te::Clip*> (sel)) t = dynamic_cast<te::AudioTrack*> (c->getTrack());
+            }
+            if (t != nullptr && Instruments::isInstrumentTrack (*t))
+                midiToTrack (*t);
+            refreshButtons();
+        }
         else
         {
             auto& t = edit->getTransport();
@@ -1474,6 +1816,17 @@ public:
 
     void initialise (const String&) override
     {
+        // Settings used to land in ~/Velody (a visible folder in home): into ~/.config/Velody.
+        auto oldSettings = File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Velody/Velody.settings");
+        auto newSettings = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Velody/Velody.settings");
+        if (oldSettings.existsAsFile() && ! newSettings.exists())
+        {
+            newSettings.getParentDirectory().createDirectory();
+            oldSettings.moveFileTo (newSettings);
+        }
+        if (oldSettings.getParentDirectory().isDirectory() && oldSettings.getParentDirectory().getNumberOfChildFiles (File::findFilesAndDirectories | File::ignoreHiddenFiles) == 0)
+            oldSettings.getParentDirectory().deleteFile();
+
         PluginPaths::setEnvironment (PluginPaths::atStart()); // REAPER's Linux plugins, before the engine starts
         LookAndFeel::setDefaultLookAndFeel (&look);
         window = std::make_unique<MainWindow>();
