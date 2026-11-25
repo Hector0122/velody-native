@@ -298,14 +298,22 @@ namespace Import
             }
 
             String name = audio.getFileNameWithoutExtension();
+            bool separated = false;
             if (outcome.ok && ! stop())
             {
                 stage ("Separando");
                 outcome = steps.separate (audio, percent, stop);
+                separated = outcome.ok;
                 // The song folder is the stems' folder (separate.py names it after the file).
                 if (outcome.ok && ! outcome.stems.isEmpty())
                     name = File (outcome.stems[0]).getParentDirectory().getFileName();
             }
+
+            // The song is in the library now: tell its source right away (Vibes takes it off its list).
+            // Not after the analysis, which can be cut short by closing Velody (the background analysis
+            // finishes it later); then the song would come back on every start.
+            if (separated && job.afterImport)
+                job.afterImport();
 
             if (outcome.ok && ! stop())
             {
@@ -327,11 +335,7 @@ namespace Import
                 j.progress = outcome.ok ? 100 : j.progress;
             });
             if (outcome.ok && ! cancelled)
-            {
-                if (job.afterImport)
-                    job.afterImport();
                 post ([this, name] { if (onImported) onImported (name); });
-            }
         }
     };
 

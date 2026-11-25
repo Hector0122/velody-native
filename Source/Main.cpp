@@ -1177,6 +1177,10 @@ private:
         edit->playInStopEnabled = true;
         edit->getTransport().addChangeListener (this);
 
+        // Older versions made one track per channel of a generic audio device (dozens of empty tracks):
+        // beyond the 8 input tracks Velody uses, the empty ones go when the edit opens.
+        if (SongEdit::removeEmptyTracks (*edit, 8) > 0)
+            edit->getUndoManager().clearUndoHistory();
         assignInputsToTracks();
         save();
 

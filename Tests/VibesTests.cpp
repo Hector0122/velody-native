@@ -129,6 +129,22 @@ struct VibesTests : UnitTest
             expect (waitFor ([&] { return queue.pending() == 0; }));
         }
 
+        beginTest ("closing Velody during the analysis still takes the separated song off Vibes' list");
+        {
+            Import::Steps slow = steps;
+            std::atomic<bool> analysing { false };
+            slow.analyse = [&] (const String&, Import::Stop stop) { analysing = true; while (! stop()) Thread::sleep (5); };
+            auto q = std::make_unique<Import::Queue> (slow);
+            Vibes::Poller p2 (*q, settings, dl);
+            post ("/_vibes?id=ddddddddddd&title=Lenta&artists=Banda&size=40");
+            int added = -1;
+            p2.check ([&] (int a, const String&) { added = a; });
+            expect (waitFor ([&] { return analysing.load(); }));
+            q = nullptr; // like closing the app mid-analysis
+            expect (! (bool) vibesState()["ddddddddddd"]["sent"]);
+            expect (lib.getChildFile ("Banda - Lenta").isDirectory());
+        }
+
         beginTest ("Vibes unreachable: an error, nothing queued");
         Cloud::Settings { "http://127.0.0.1:1", "tok", true }.save (settings);
         queue.clearFinished();
