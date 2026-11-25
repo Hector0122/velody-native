@@ -30,6 +30,28 @@ struct MixerPanelTests : UnitTest
             expectWithinAbsoluteError (vp->getPan(), -0.5f, 0.01f);
             expectWithinAbsoluteError (te::getAudioTracks (*edit)[0]->getVolumePlugin()->getVolumeDb(), 0.0f, 0.05f);
 
+            beginTest ("strip M/S buttons mute and solo the track");
+            mixer.rows[0]->mute.setToggleState (true, dontSendNotification);
+            mixer.rows[0]->mute.onClick();
+            mixer.rows[1]->solo.setToggleState (true, dontSendNotification);
+            mixer.rows[1]->solo.onClick();
+            expect (te::getAudioTracks (*edit)[0]->isMuted (false));
+            expect (te::getAudioTracks (*edit)[1]->isSolo (false));
+            mixer.rows[0]->mute.setToggleState (false, dontSendNotification);
+            mixer.rows[0]->mute.onClick();
+            mixer.rows[1]->solo.setToggleState (false, dontSendNotification);
+            mixer.rows[1]->solo.onClick();
+            expect (! te::getAudioTracks (*edit)[0]->isMuted (false));
+
+            beginTest ("renaming: from the strip's name renames the track, and a rename elsewhere shows up");
+            mixer.rows[0]->label.setText ("Voz", sendNotificationSync);
+            expectEquals (te::getAudioTracks (*edit)[0]->getName(), String ("Voz"));
+            te::getAudioTracks (*edit)[1]->setName ("Guitarra");
+            expectEquals (mixer.rows[1]->label.getText(), String ("Guitarra"));
+            mixer.rows[0]->label.setText ("   ", sendNotificationSync); // empty: keeps the name
+            expectEquals (te::getAudioTracks (*edit)[0]->getName(), String ("Voz"));
+            expectEquals (mixer.rows[0]->label.getText(), String ("Voz"));
+
             beginTest ("rebuild follows added tracks");
             edit->ensureNumberOfAudioTracks (3);
             mixer.rebuild();

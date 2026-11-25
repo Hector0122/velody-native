@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(VelodyNative VERSION 0.2.0)
+project(VelodyNative VERSION 0.3.0)
 
 set(CMAKE_CXX_STANDARD 20)
 if (APPLE)
@@ -19,6 +19,10 @@ juce_add_gui_app(Velody
     NEEDS_WEB_BROWSER FALSE)
 
 juce_generate_juce_header(Velody)
+
+# Brand fonts (SIL OFL), embedded: Archivo Black for titles, IBM Plex Mono for numbers.
+juce_add_binary_data(VelodyAssets SOURCES Resources/fonts/ArchivoBlack-Regular.ttf Resources/fonts/IBMPlexMono-Medium.ttf Resources/brand/velody-icon.svg)
+set_target_properties(VelodyAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_sources(Velody PRIVATE Source/Main.cpp)
 target_compile_definitions(Velody PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker")
@@ -40,6 +44,7 @@ target_compile_definitions(Velody PRIVATE
     JUCE_WEB_BROWSER=0)
 
 target_link_libraries(Velody PRIVATE
+    VelodyAssets
     tracktion::tracktion_core
     tracktion::tracktion_engine
     tracktion::tracktion_graph
@@ -59,9 +64,10 @@ endif()
 enable_testing()
 juce_add_console_app(VelodyTests PRODUCT_NAME "VelodyTests" NEEDS_CURL TRUE)
 juce_generate_juce_header(VelodyTests)
-target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp Tests/PythonWorkerTests.cpp Tests/SongMetaTests.cpp Tests/ExporterTests.cpp Tests/SongInfoTests.cpp Tests/SongDeleteTests.cpp Tests/CloudTests.cpp Tests/CloudUiTests.cpp Tests/ImportQueueTests.cpp Tests/VibesTests.cpp Tests/PracticeMetaTests.cpp Tests/SetupTests.cpp Tests/LibraryAnalysisTests.cpp Tests/MixPanTests.cpp Tests/TrimTests.cpp Tests/RecordCountInTests.cpp Tests/SongSearchTests.cpp Tests/UpdaterTests.cpp Tests/PluginPathsTests.cpp)
+target_sources(VelodyTests PRIVATE Tests/LibraryTests.cpp Tests/SongEditTests.cpp Tests/MixerPanelTests.cpp Tests/MetronomeTests.cpp Tests/PracticeTests.cpp Tests/PythonWorkerTests.cpp Tests/SongMetaTests.cpp Tests/ExporterTests.cpp Tests/SongInfoTests.cpp Tests/SongDeleteTests.cpp Tests/CloudTests.cpp Tests/CloudUiTests.cpp Tests/ImportQueueTests.cpp Tests/VibesTests.cpp Tests/PracticeMetaTests.cpp Tests/SetupTests.cpp Tests/LibraryAnalysisTests.cpp Tests/MixPanTests.cpp Tests/TrimTests.cpp Tests/RecordCountInTests.cpp Tests/SongSearchTests.cpp Tests/UpdaterTests.cpp Tests/PluginPathsTests.cpp Tests/SourceTextTests.cpp Tests/BrandTests.cpp Tests/ProjectsTests.cpp)
 target_compile_definitions(VelodyTests PRIVATE VELODY_PYTHON_WORKER_DIR="${CMAKE_SOURCE_DIR}/python-worker" JUCE_USE_MP3AUDIOFORMAT=1 TRACKTION_ENABLE_TIMESTRETCH_SIGNALSMITH=1 JUCE_MODAL_LOOPS_PERMITTED=1 JUCE_STRICT_REFCOUNTEDPOINTER=1 JUCE_USE_CURL=1 JUCE_WEB_BROWSER=0)
 target_link_libraries(VelodyTests PRIVATE
+    VelodyAssets
     tracktion::tracktion_core tracktion::tracktion_engine tracktion::tracktion_graph
     juce::juce_audio_devices juce::juce_audio_processors juce::juce_audio_utils juce::juce_cryptography
     juce::juce_recommended_config_flags)

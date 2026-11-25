@@ -227,7 +227,7 @@ namespace CloudUi
         const bool online = l.enabled && ! l.offline;
         PopupMenu m;
         m.addItem (String (u8"Buscar canción…  (Ctrl+F)"), [act] { act ({ Action::search }); });
-        m.addItem (String (u8"Proyecto vacío"), [act] { act ({ Action::openEmpty }); });
+        m.addItem (String (u8"Nuevo proyecto (sin canción)…"), [act] { act ({ Action::openEmpty }); });
         m.addSeparator();
 
         if (l.enabled && l.offline)

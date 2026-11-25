@@ -59,7 +59,8 @@ struct MixPanTests : UnitTest
 
         beginTest ("a Master row after the tracks; nothing added while Mix Pan is centred");
         expect (mixer.master != nullptr);
-        expectEquals (mixer.getIdealHeight(), 3 * MixerPanel::rowHeight);
+        expectEquals (mixer.rows.size(), 2);
+        expectEquals (mixer.getIdealHeight(), MixerPanel::idealHeight);
         SongEdit::setMixPan (*edit, 0.0f);
         expect (SongEdit::mixPanPlugin (*drums) == nullptr);
 

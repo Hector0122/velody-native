@@ -212,4 +212,11 @@ namespace SongEdit
                 return p->getPan();
         return 0.0f;
     }
+
+    // Position among the audio tracks (Tracktion's own index also counts its hidden tempo/marker tracks),
+    // for the per-track colour.
+    inline int audioTrackIndex (te::Track& t)
+    {
+        return te::getAudioTracks (t.edit).indexOf (dynamic_cast<te::AudioTrack*> (&t));
+    }
 }

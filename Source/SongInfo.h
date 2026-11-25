@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "Metronome.h"
+#include "Theme.h"
 
 // Ports of velody/src/renderer/src/utils.ts: where the music starts, and the chord "now → next".
 namespace SongInfo
@@ -88,16 +89,26 @@ namespace SongInfo
 
         void paint (Graphics& g) override
         {
-            if (chords.empty())
-                return;
             auto r = getLocalBounds().toFloat();
-            g.setColour (Colours::white);
-            g.setFont (FontOptions (r.getHeight() * 0.85f, Font::bold));
-            const auto nowW = r.getHeight() * 0.6f * (float) jmax (2, now.length()) + 8;
-            g.drawText (now, r.removeFromLeft (nowW), Justification::centredRight);
-            g.setColour (Colours::grey);
-            g.setFont (FontOptions (r.getHeight() * 0.55f));
-            g.drawText (String (u8"  →  ") + next, r, Justification::centredLeft);
+            if (chords.empty())
+            {
+                g.setColour (Theme::muted.withAlpha (0.6f));
+                g.setFont (Theme::body (13.0f));
+                g.drawText (String (u8"Aquí van los acordes (al abrir una canción analizada)"), r, Justification::centred);
+                return;
+            }
+            // The chord now, big (brand title font), and the next one, smaller and muted.
+            const auto nowFont = Theme::title (jmin (r.getHeight() * 0.8f, 46.0f));
+            const auto nextFont = Theme::mono (jmin (r.getHeight() * 0.4f, 20.0f));
+            const float nowW = GlyphArrangement::getStringWidth (nowFont, now) + 12;
+            const float nextW = GlyphArrangement::getStringWidth (nextFont, String (u8"  →  ") + next);
+            auto line = r.withSizeKeepingCentre (jmin (r.getWidth(), nowW + nextW), r.getHeight());
+            g.setColour (Theme::text);
+            g.setFont (nowFont);
+            g.drawText (now, line.removeFromLeft (nowW), Justification::centredRight);
+            g.setColour (Theme::muted);
+            g.setFont (nextFont);
+            g.drawText (String (u8"  →  ") + next, line, Justification::centredLeft);
         }
 
     private:

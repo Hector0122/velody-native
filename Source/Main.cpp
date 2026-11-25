@@ -1,6 +1,9 @@
 #include <JuceHeader.h>
 #include "common/Utilities.h"
-#include "common/Components.h"
+#include "Theme.h"
+#include "ui/Components.h"
+#include "ui/TransportButton.h"
+#include "ui/Brand.h"
 #include "common/PluginWindow.h"
 #include "SongEdit.h"
 #include "MixerPanel.h"
@@ -16,6 +19,7 @@
 #include "SongSearch.h"
 #include "Updater.h"
 #include "PluginPaths.h"
+#include "Projects.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -38,9 +42,41 @@ class MainComponent : public Component,
 public:
     MainComponent()
     {
-        Helpers::addAndMakeVisible (*this, { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton,
-                                             &newTrackButton, &deleteButton, &folderButton, &startButton, &trimButton, &chordDisplay, &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
-                                             &status, &mixer });
+        Helpers::addAndMakeVisible (*this, { &wordmark, &songTitleLabel, &songInfo, &songsButton, &projectsButton, &importButton, &exportButton, &settingsButton,
+                                             &startButton, &playButton, &recordButton, &timeLabel, &chordDisplay, &trimButton, &clickButton, &newTrackButton, &deleteButton,
+                                             &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedSlider, &pitchLabel, &pitchSlider,
+                                             &mixerToggle, &status, &mixer });
+
+        // Header: wordmark, the open song (title + BPM/trim/speed), the menus.
+        songTitleLabel.setFont (Theme::title (17.0f));
+        songInfo.setFont (Theme::mono (12.0f));
+        songInfo.setColour (Label::textColourId, Theme::muted);
+        settingsButton.onClick = [this] { showSettingsMenu(); };
+        projectsButton.onClick = [this] { showProjectsMenu(); };
+        clickButton.setClickingTogglesState (true);
+        clickButton.setTooltip (String (u8"Metrónomo del proyecto (al tempo del proyecto)"));
+        clickButton.onClick = [this] { if (edit != nullptr) edit->clickTrackEnabled = clickButton.getToggleState(); };
+        timeLabel.setFont (Theme::mono (22.0f));
+        timeLabel.setJustificationType (Justification::centred);
+        status.setFont (Theme::mono (12.0f));
+        status.setColour (Label::textColourId, Theme::muted);
+        for (auto* l : { &speedLabel, &pitchLabel })
+        {
+            l->setFont (Theme::body (12.0f));
+            l->setColour (Label::textColourId, Theme::muted);
+            l->setJustificationType (Justification::centredRight);
+        }
+        playButton.setTooltip ("Play / Stop (barra espaciadora)");
+        recordButton.setTooltip ("Grabar / Detener");
+        mixerOpen = settings.getBoolValue ("mixerOpen", true);
+        mixerToggle.onClick = [this]
+        {
+            mixerOpen = ! mixerOpen;
+            settings.setValue ("mixerOpen", mixerOpen);
+            refreshMixerToggle();
+            resized();
+        };
+        refreshMixerToggle();
 
         speedLabel.setText ("Velocidad", dontSendNotification);
         pitchLabel.setText ("Tono", dontSendNotification);
@@ -100,7 +136,7 @@ public:
         if (! Setup::ready())
             Timer::callAfterDelay (500, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->showSetup(); });
         exportButton.onClick = [this] { showExportMenu(); };
-        startButton.setTooltip (String (u8"Ir a donde empieza la música"));
+        startButton.setTooltip (String (u8"Ir a donde empieza la música (o el inicio del recorte)"));
         startButton.onClick = [this] { goToMusicStart(); };
         trimButton.setTooltip (String (u8"Recorte: dónde empieza y termina la canción para ti (se salta una intro larga); se guarda en la canción"));
         trimButton.onClick = [this] { showTrimMenu(); };
@@ -113,11 +149,11 @@ public:
             lastTrimCheck = pos;
             if (stop)
                 stopPlayback();
+            timeLabel.setText (Trim::clock (jmax (0.0, pos)) + "." + String ((int) (jmax (0.0, pos) * 10) % 10)
+                                   + (songLength > 0 ? "  /  " + Trim::clock (songLength) : String()), dontSendNotification);
         };
         trimTimer.startTimer (30);
         chordDisplay.songTime = [this] { return edit != nullptr ? edit->getTransport().getPosition().inSeconds() * speed() : 0.0; };
-        audioButton.onClick = [this] { EngineHelpers::showAudioDeviceSettings (engine); };
-        pluginsButton.onClick = [this] { showPluginScanner(); };
         playButton.onClick = [this] { stopOrPlay (false); };
         recordButton.onClick = [this] { stopOrPlay (true); };
         newTrackButton.onClick = [this]
@@ -129,7 +165,6 @@ public:
         };
         mixer.onMixPanChanged = [this] (float pan) { settings.setValue ("mixPan", pan); };
         deleteButton.onClick = [this] { deleteSelection(); };
-        folderButton.onClick = [] { projectFile().revealToUser(); };
 
         cloud.onStatus = [this] (const String& text) { status.setText (text, dontSendNotification); };
         cloud.cleanupStaleDownloads(); // a download cut off by a crash or quit
@@ -139,14 +174,15 @@ public:
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
 
-        openEdit (projectFile(), nullptr);
+        Projects::migrateLegacy (projectsDir());
+        openLast();
         setWantsKeyboardFocus (true); // Ctrl+F
 
         addChildComponent (updateButton);
-        updateButton.setColour (TextButton::buttonColourId, Colours::darkgreen);
+        updateButton.setColour (TextButton::buttonColourId, Theme::success.darker (0.3f));
         updateButton.onClick = [this] { confirmUpdate(); };
         Timer::callAfterDelay (4000, [sp = SafePointer<MainComponent> (this)] { if (sp != nullptr) sp->checkForUpdate(); });
-        setSize (1000, 600);
+        setSize (1280, 800);
     }
 
     ~MainComponent() override
@@ -159,33 +195,85 @@ public:
         engine.getTemporaryFileManager().getTempDirectory().deleteRecursively();
     }
 
+    static constexpr int headerH = 60, transportH = 76, practiceH = 44, statusH = 26, mixerBarH = 30;
+
     void paint (Graphics& g) override
     {
-        g.fillAll (getLookAndFeel().findColour (ResizableWindow::backgroundColourId));
+        g.fillAll (Theme::bg);
+        auto r = getLocalBounds();
+        auto header = r.removeFromTop (headerH);
+        auto transport = r.removeFromTop (transportH + practiceH);
+        auto statusBar = r.removeFromBottom (statusH);
+        g.setColour (Theme::panel);
+        g.fillRect (header);
+        g.fillRect (transport);
+        g.fillRect (statusBar);
+        g.fillRect (mixerBarArea);
+        g.setColour (Theme::outline);
+        g.fillRect (header.removeFromBottom (1));
+        g.fillRect (transport.removeFromBottom (1));
+        g.fillRect (statusBar.removeFromTop (1));
+        g.fillRect (mixerBarArea.withHeight (1));
+
+        // The clock in a pill, the chords on a card.
+        for (auto* c : std::initializer_list<Component*> { &timeLabel, &chordDisplay })
+        {
+            auto b = c->getBounds().toFloat().expanded (c == &timeLabel ? 4.0f : 0.0f, 2.0f);
+            g.setColour (Theme::lane);
+            g.fillRoundedRectangle (b, Theme::radius + 2);
+            g.setColour (Theme::outline);
+            g.drawRoundedRectangle (b, Theme::radius + 2, 1.0f);
+        }
     }
 
     void resized() override
     {
         auto r = getLocalBounds();
-        auto top = r.removeFromTop (34);
-        const int w = 92;
-        for (auto* b : { &songsButton, &importButton, &exportButton, &audioButton, &pluginsButton, &playButton, &recordButton, &newTrackButton, &deleteButton, &folderButton })
-            b->setBounds (top.removeFromLeft (w).reduced (2));
-        auto row = r.removeFromTop (30);
-        startButton.setBounds (row.removeFromLeft (70).reduced (2));
-        trimButton.setBounds (row.removeFromLeft (80).reduced (2));
-        countInBox.setBounds (row.removeFromLeft (180).reduced (2));
-        soundBox.setBounds (row.removeFromLeft (120).reduced (2));
-        recordCountInBox.setBounds (row.removeFromLeft (200).reduced (2));
-        speedLabel.setBounds (row.removeFromLeft (70));
-        speedSlider.setBounds (row.removeFromLeft (260));
-        pitchLabel.setBounds (row.removeFromLeft (40));
-        pitchSlider.setBounds (row.removeFromLeft (260));
-        chordDisplay.setBounds (row.reduced (8, 1));
+
+        // Header: Velody · song · menus (· update).
+        auto header = r.removeFromTop (headerH).reduced (16, 10);
+        wordmark.setBounds (header.removeFromLeft (150));
+        for (auto* b : { &settingsButton, &exportButton, &importButton, &projectsButton, &songsButton })
+            b->setBounds (header.removeFromRight (b == &songsButton || b == &projectsButton ? 132 : 120).reduced (3, 2));
         if (updateButton.isVisible())
-            updateButton.setBounds (top.removeFromRight (170).reduced (2));
-        status.setBounds (top.reduced (4, 0));
-        mixer.setBounds (r.removeFromBottom (jmin (mixer.getIdealHeight(), r.getHeight() / 3)));
+            updateButton.setBounds (header.removeFromRight (180).reduced (3, 2));
+        auto titleArea = header.withTrimmedLeft (12);
+        songTitleLabel.setBounds (titleArea.removeFromTop (titleArea.getHeight() * 11 / 20));
+        songInfo.setBounds (titleArea);
+
+        // Transport: ⏮ ▶ ● time · chords · Recorte, + Pista, Borrar.
+        auto transport = r.removeFromTop (transportH).reduced (16, 8);
+        startButton.setBounds (transport.removeFromLeft (44).withSizeKeepingCentre (44, 44));
+        transport.removeFromLeft (8);
+        playButton.setBounds (transport.removeFromLeft (60).withSizeKeepingCentre (60, 60));
+        transport.removeFromLeft (8);
+        recordButton.setBounds (transport.removeFromLeft (52).withSizeKeepingCentre (52, 52));
+        transport.removeFromLeft (16);
+        timeLabel.setBounds (transport.removeFromLeft (210).reduced (0, 6));
+        transport.removeFromLeft (12);
+        for (auto* b : { &deleteButton, &newTrackButton, &trimButton, &clickButton })
+            if (b->isVisible())
+                b->setBounds (transport.removeFromRight (104).withSizeKeepingCentre (98, 34));
+        chordDisplay.setBounds (transport.reduced (16, 4));
+
+        // Practice: count-ins, click sound, speed, pitch.
+        auto practice = r.removeFromTop (practiceH).reduced (16, 6);
+        countInBox.setBounds (practice.removeFromLeft (170).reduced (3, 0));
+        recordCountInBox.setBounds (practice.removeFromLeft (220).reduced (3, 0));
+        soundBox.setBounds (practice.removeFromLeft (130).reduced (3, 0));
+        const int sliderW = jmax (120, (practice.getWidth() - 180) / 2);
+        speedLabel.setBounds (practice.removeFromLeft (90));
+        speedSlider.setBounds (practice.removeFromLeft (sliderW));
+        pitchLabel.setBounds (practice.removeFromLeft (60));
+        pitchSlider.setBounds (practice.removeFromLeft (sliderW));
+
+        // Bottom: status bar, then the mixer (folds away) with its bar.
+        status.setBounds (r.removeFromBottom (statusH).reduced (16, 0));
+        const int mixerH = mixerOpen ? jmin (mixer.getIdealHeight(), r.getHeight() * 45 / 100) : 0;
+        mixer.setVisible (mixerOpen);
+        mixer.setBounds (r.removeFromBottom (mixerH).reduced (12, 0));
+        mixerBarArea = r.removeFromBottom (mixerBarH);
+        mixerToggle.setBounds (mixerBarArea.reduced (12, 3).removeFromLeft (120));
         if (editComponent != nullptr)
             editComponent->setBounds (r);
     }
@@ -196,12 +284,185 @@ private:
     std::unique_ptr<te::Edit> edit;
     std::unique_ptr<EditComponent> editComponent;
 
-    TextButton songsButton { "Canciones" }, importButton { "Importar" }, exportButton { "Exportar" }, audioButton { "Audio" }, pluginsButton { "Plugins" }, playButton { "Play" },
-               recordButton { "Grabar" }, newTrackButton { "+ Pista" }, deleteButton { "Borrar" },
-               folderButton { "Carpeta" };
-    Label status;
+    Theme::IconButton songsButton { "Canciones", Theme::Icon::songs }, projectsButton { "Proyectos", Theme::Icon::projects },
+                      importButton { "Importar", Theme::Icon::import },
+                      exportButton { "Exportar", Theme::Icon::exportIcon }, settingsButton { "Ajustes", Theme::Icon::settings };
+    TextButton newTrackButton { "+ Pista" }, deleteButton { "Borrar" }, mixerToggle, clickButton { "Click" };
+    TransportButton playButton { TransportButton::Kind::play, "Play" }, recordButton { TransportButton::Kind::record, "Grabar" },
+                    startButton { TransportButton::Kind::start, "Inicio" };
+    Label status, songTitleLabel, songInfo, timeLabel;
+    Brand::Wordmark wordmark;
     ComboBox countInBox, soundBox;
-    TextButton startButton { String (u8"⏮ Inicio") };
+    bool mixerOpen = true;
+    Rectangle<int> mixerBarArea;
+    double songLength = 0; // song time, for the clock
+
+    void refreshMixerToggle() { mixerToggle.setButtonText (mixerOpen ? String (u8"Mezcla  ▾") : String (u8"Mezcla  ▸")); }
+
+    // Last opened song or project; else the most recent project; else a new one.
+    void openLast()
+    {
+        const auto lastSong = settings.getValue ("lastSong");
+        if (lastSong.isNotEmpty())
+            for (auto& song : Library::scan (Library::defaultRoot()))
+                if (song.name == lastSong)
+                    return openEdit (projectFile (song.name), &song);
+        if (File last (settings.getValue ("lastProject")); last.existsAsFile() && Projects::isProject (projectsDir(), last))
+            return openEdit (last, nullptr);
+        openScratch();
+    }
+
+    void openScratch()
+    {
+        auto projects = Projects::list (projectsDir());
+        if (! projects.isEmpty())
+            return openEdit (projects[0].file, nullptr);
+        createProject (Projects::suggestName (projectsDir()), 120.0, "4/4");
+    }
+
+    void createProject (const String& name, double bpm, const String& signature)
+    {
+        Projects::folder (projectsDir()).createDirectory();
+        openEdit (Projects::fileFor (projectsDir(), name.trim()), nullptr);
+        Projects::setUp (*edit, bpm, signature);
+        clickButton.setToggleState (edit->clickTrackEnabled.get(), dontSendNotification);
+        save();
+        refreshSongInfo();
+    }
+
+    std::unique_ptr<AlertWindow> projectDialog;
+
+    void showNewProject()
+    {
+        projectDialog = std::make_unique<AlertWindow> ("Nuevo proyecto", String (u8"Un proyecto desde cero: grabas tus pistas sobre el metrónomo, sin canción."),
+                                                       MessageBoxIconType::NoIcon);
+        projectDialog->addTextEditor ("name", Projects::suggestName (projectsDir()), "Nombre");
+        projectDialog->addTextEditor ("bpm", "120", "Tempo (BPM)");
+        projectDialog->addComboBox ("sig", Projects::signatures, String (u8"Compás"));
+        projectDialog->getComboBoxComponent ("sig")->setSelectedItemIndex (0);
+        projectDialog->addButton ("Crear", 1, KeyPress (KeyPress::returnKey));
+        projectDialog->addButton ("Cancelar", 0, KeyPress (KeyPress::escapeKey));
+        projectDialog->enterModalState (true, ModalCallbackFunction::create ([this] (int result)
+        {
+            const auto name = projectDialog->getTextEditorContents ("name").trim();
+            const auto bpmText = projectDialog->getTextEditorContents ("bpm").trim();
+            const auto sig = projectDialog->getComboBoxComponent ("sig")->getText();
+            projectDialog = nullptr;
+            if (result != 1)
+                return;
+            if (auto why = Projects::checkName (projectsDir(), name); why.isNotEmpty())
+                return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Nuevo proyecto", why);
+            const double bpm = bpmText.getDoubleValue();
+            if (! (bpm >= 30 && bpm <= 300))
+                return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Nuevo proyecto", "El tempo va de 30 a 300 BPM");
+            createProject (name, bpm, sig);
+        }), false);
+    }
+
+    void showProjectsMenu()
+    {
+        PopupMenu m;
+        m.addItem (String (u8"Nuevo proyecto…"), [this] { showNewProject(); });
+        auto projects = Projects::list (projectsDir());
+        if (! projects.isEmpty())
+            m.addSectionHeader ("Mis proyectos");
+        for (auto& p : projects)
+            m.addItem (p.name, true, p.file == currentEditFile, [this, f = p.file] { openEdit (f, nullptr); });
+        if (! currentSong.has_value() && Projects::isProject (projectsDir(), currentEditFile))
+        {
+            m.addSeparator();
+            m.addItem (String (u8"Renombrar «") + currentEditFile.getFileNameWithoutExtension() + String (u8"»…"), [this] { renameProject(); });
+            m.addItem (String (u8"Quitar «") + currentEditFile.getFileNameWithoutExtension() + String (u8"» (a la papelera)…"), [this] { removeProject(); });
+        }
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (projectsButton));
+    }
+
+    void renameProject()
+    {
+        projectDialog = std::make_unique<AlertWindow> ("Renombrar proyecto", String(), MessageBoxIconType::NoIcon);
+        projectDialog->addTextEditor ("name", currentEditFile.getFileNameWithoutExtension(), "Nombre");
+        projectDialog->addButton ("Renombrar", 1, KeyPress (KeyPress::returnKey));
+        projectDialog->addButton ("Cancelar", 0, KeyPress (KeyPress::escapeKey));
+        projectDialog->enterModalState (true, ModalCallbackFunction::create ([this] (int result)
+        {
+            const auto name = projectDialog->getTextEditorContents ("name").trim();
+            projectDialog = nullptr;
+            if (result != 1 || name == currentEditFile.getFileNameWithoutExtension())
+                return;
+            if (auto why = Projects::checkName (projectsDir(), name, currentEditFile); why.isNotEmpty())
+                return AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Renombrar proyecto", why);
+            const auto old = currentEditFile;
+            const auto target = Projects::fileFor (projectsDir(), name);
+            const auto parking = Projects::folder (projectsDir()).getChildFile (".velody-closing.tracktionedit"); // hidden: never listed
+            openEdit (parking, nullptr); // let go of the file (saved) before moving it
+            const bool ok = Projects::rename (projectsDir(), old, name);
+            openEdit (ok ? target : old, nullptr);
+            parking.deleteFile();
+            if (! ok)
+                AlertWindow::showMessageBoxAsync (MessageBoxIconType::WarningIcon, "Renombrar proyecto", "No se pudo renombrar");
+        }), false);
+    }
+
+    void removeProject()
+    {
+        const auto f = currentEditFile;
+        AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::QuestionIcon)
+                                    .withTitle (String (u8"¿Quitar «") + f.getFileNameWithoutExtension() + String (u8"»?"))
+                                    .withMessage (String (u8"El proyecto va a la papelera (puedes recuperarlo de ahí). Tus grabaciones se quedan en la carpeta de proyectos."))
+                                    .withButton ("Quitar", 1)
+                                    .withButton ("Cancelar", 0),
+                                [this, f] (int r)
+                                {
+                                    if (r != 1)
+                                        return;
+                                    const auto scratch = Projects::folder (projectsDir()).getChildFile (".velody-closing.tracktionedit"); // hidden: never listed
+                                    openEdit (scratch, nullptr); // close it first
+                                    f.moveToTrash();
+                                    scratch.deleteFile();
+                                    openScratch();
+                                });
+    }
+
+    // Audio, plugins, cloud, Vibes, setup, project folder: one menu instead of a row of buttons.
+    void showSettingsMenu()
+    {
+        PopupMenu m;
+        m.addItem (String (u8"Interfaz de audio…"), [this] { EngineHelpers::showAudioDeviceSettings (engine); });
+        m.addItem (String (u8"Plugins (VST3 / LV2)…"), [this] { showPluginScanner(); });
+        m.addSeparator();
+        m.addItem (String (u8"Nube…"), [this] { showCloudSettings(); });
+        m.addItem (String (u8"Vibes…"), [this] { showVibesSettings(); });
+        m.addItem (String (u8"Instalación (Demucs)…"), [this] { showSetup(); });
+        m.addSeparator();
+        m.addItem ("Abrir la carpeta de proyectos y grabaciones", [] { projectsDir().revealToUser(); });
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (settingsButton));
+    }
+
+    // Header subtitle: tempo, trim, practice speed/pitch.
+    void refreshSongInfo()
+    {
+        songTitleLabel.setText (currentSong.has_value() ? currentSong->name : currentEditFile.getFileNameWithoutExtension(), dontSendNotification);
+        StringArray parts;
+        if (! currentSong.has_value() && edit != nullptr)
+        {
+            parts.add ("Proyecto");
+            parts.add (String (roundToInt (Projects::bpm (*edit))) + " BPM");
+            parts.add (Projects::signature (*edit));
+            parts.add (te::getAudioTracks (*edit).size() == 1 ? String ("1 pista") : String (te::getAudioTracks (*edit).size()) + " pistas");
+        }
+        else if (currentSong.has_value())
+        {
+            parts.add (songMeta.bpm > 0 ? String (roundToInt (songMeta.bpm)) + " BPM" : (analysingOpenSong ? String (u8"analizando…") : String ("sin tempo")));
+            if (trim.active())
+                parts.add (Trim::describe (trim).replace ("Recorte: ", "recorte "));
+            if (speed() != 1.0)
+                parts.add (String (roundToInt (speed() * 100)) + " %");
+            if (semitones() != 0)
+                parts.add ((semitones() > 0 ? "+" : "") + String (semitones()) + " st");
+        }
+
+        songInfo.setText (parts.joinIntoString (String (u8"  ·  ")), dontSendNotification);
+    }
     SongInfo::ChordDisplay chordDisplay;
     double musicStart = 0; // song time where the first sound is
 
@@ -575,6 +836,12 @@ private:
 
         currentEditFile = f;
         currentSong = song != nullptr ? std::optional<Library::Song> (*song) : std::nullopt;
+        // Reopened at the next start; a project shows its click toggle.
+        const bool isProject = song == nullptr && Projects::isProject (projectsDir(), f) && ! f.getFileName().startsWithChar ('.');
+        if (song != nullptr)      { settings.setValue ("lastSong", song->name); settings.removeValue ("lastProject"); }
+        else if (isProject)       { settings.setValue ("lastProject", f.getFullPathName()); settings.removeValue ("lastSong"); }
+        clickButton.setVisible (song == nullptr);
+        clickButton.setToggleState (edit->clickTrackEnabled.get(), dontSendNotification);
 
         songMeta = song != nullptr ? Metronome::readMeta (song->dir) : Metronome::SongMeta();
         countIn = CountInPlugin::findOrInsert (*edit);
@@ -708,7 +975,7 @@ private:
                               if (! update)
                                   return;
                               updateButton.setButtonText ("Actualizar a " + update->version);
-                              updateButton.setTooltip ("Hay una versión nueva de Velody: " + update->version);
+                              updateButton.setTooltip (String (u8"Hay una versión nueva de Velody: ") + update->version);
                               updateButton.setVisible (true);
                               resized();
                           });
@@ -770,7 +1037,7 @@ private:
         using A = CloudUi::Action;
         switch (a.kind)
         {
-            case A::openEmpty:       return openEdit (projectFile(), nullptr);
+            case A::openEmpty:       return showNewProject();
             case A::open:            return openSong (a.entry);
             case A::download:        return downloadAndOpen (a.entry);
             case A::upload:          return uploadSong (a.entry.name);
@@ -865,7 +1132,7 @@ private:
 
     void removeLocalCopy (const Cloud::Entry& e)
     {
-        openEdit (projectFile(), nullptr); // close the song first: its folder is about to move
+        openScratch(); // close the song first: its folder is about to move
         cloud.removeLocal (e, [] (const File& f) { return f.moveToTrash(); }, [this, name = e.name] (const String& error)
         {
             if (error.isNotEmpty())
@@ -949,7 +1216,7 @@ private:
 
     void deleteSong (const SongDelete::Plan& plan, bool includeTakes)
     {
-        openEdit (projectFile(), nullptr); // close the song first: its files are about to move
+        openScratch(); // close the song first: its files are about to move
 
         auto r = SongDelete::execute (plan, includeTakes, Library::defaultRoot(), projectsDir());
         if (r.failed())
@@ -984,7 +1251,12 @@ private:
         const auto plan = RecordCountIn::plan (songMeta, t.getPosition().inSeconds(), speed(),
                                                RecordCountIn::barsOptions[jmax (0, recordCountInBox.getSelectedItemIndex())]);
         if (! plan.hasCountIn() || countIn == nullptr)
+        {
+            // A project (no song grid): Tracktion's own count-in, at the project's tempo.
+            if (! currentSong.has_value())
+                edit->setCountInMode (Projects::countInFor (RecordCountIn::barsOptions[jmax (0, recordCountInBox.getSelectedItemIndex())]));
             return EngineHelpers::toggleRecord (*edit);
+        }
 
         countInFrom = plan.punchIn;
         countIn->arm (plan.clicks, countInFrom, clickSound());
@@ -1074,6 +1346,7 @@ private:
         t.setPosition (te::TimePosition::fromSeconds (songPos / speed()));
         appliedSpeed = speed();
         fitViewToSong(); // the song got longer/shorter
+        songLength = currentSong.has_value() ? SongEdit::contentLength (*edit) * speed() : 0.0;
         refreshButtons();
     }
 
@@ -1108,9 +1381,13 @@ private:
         edit->getTransport().ensureContextAllocated();
 
         int trackNum = SongEdit::firstInputTrack (*edit);
+        // A generic device (PipeWire's "Default ALSA") can list dozens of input channels: tracks are made
+        // for the first few only (a 2-in interface like the Scarlett 2i2 gets its 2).
+        constexpr int maxInputTracks = 8;
+        int made = 0;
 
         for (auto instance : edit->getAllInputDevices())
-            if (instance->getInputDevice().getDeviceType() == te::InputDevice::waveDevice)
+            if (instance->getInputDevice().getDeviceType() == te::InputDevice::waveDevice && made++ < maxInputTracks)
                 if (auto t = EngineHelpers::getOrInsertAudioTrackAt (*edit, trackNum++))
                 {
                     [[maybe_unused]] auto res = instance->setTarget (t->itemID, true, &edit->getUndoManager(), 0);
@@ -1152,9 +1429,9 @@ private:
     void refreshButtons()
     {
         auto& t = edit->getTransport();
-        playButton.setButtonText (t.isPlaying() && ! t.isRecording() ? "Stop" : "Play");
-        recordButton.setButtonText (t.isRecording() ? "Detener" : "Grabar");
-        recordButton.setColour (TextButton::buttonColourId, t.isRecording() ? Colours::darkred : getLookAndFeel().findColour (TextButton::buttonColourId));
+        playButton.setActive (t.isPlaying() && ! t.isRecording());
+        recordButton.setActive (t.isRecording());
+        refreshSongInfo();
 
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
         if (analysingOpenSong && imports->pending() == 0 && exporter == nullptr && ! cloud.busy())
@@ -1198,16 +1475,22 @@ public:
     void initialise (const String&) override
     {
         PluginPaths::setEnvironment (PluginPaths::atStart()); // REAPER's Linux plugins, before the engine starts
+        LookAndFeel::setDefaultLookAndFeel (&look);
         window = std::make_unique<MainWindow>();
     }
-    void shutdown() override                 { window = nullptr; }
+    void shutdown() override
+    {
+        window = nullptr;
+        LookAndFeel::setDefaultLookAndFeel (nullptr);
+    }
 
 private:
     struct MainWindow : DocumentWindow
     {
-        MainWindow() : DocumentWindow ("Velody", Colours::black, DocumentWindow::allButtons)
+        MainWindow() : DocumentWindow ("Velody", Theme::bg, DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
+            setIcon (Brand::icon (256));
             setContentOwned (new MainComponent(), true);
             setResizable (true, false);
             centreWithSize (getWidth(), getHeight());
@@ -1217,6 +1500,7 @@ private:
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }
     };
 
+    Theme::LookAndFeel look; // outlives the window
     std::unique_ptr<MainWindow> window;
 };
 

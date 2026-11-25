@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="24" y1="24" x2="488" y2="488">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#7b6bf5"/>
+    </linearGradient>
+    <linearGradient id="shine" gradientUnits="userSpaceOnUse" x1="0" y1="24" x2="0" y2="260">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="112" ry="112" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="236" rx="112" ry="112" fill="url(#shine)"/>
+  <!-- Five stems whose ends draw a V -->
+  <rect x="94"  y="132" width="44" height="124" rx="22" ry="22" fill="#ffffff"/>
+  <rect x="164" y="132" width="44" height="190" rx="22" ry="22" fill="#ffffff"/>
+  <rect x="234" y="132" width="44" height="256" rx="22" ry="22" fill="#ffffff"/>
+  <rect x="304" y="132" width="44" height="190" rx="22" ry="22" fill="#ffffff"/>
+  <rect x="374" y="132" width="44" height="124" rx="22" ry="22" fill="#ffffff"/>
+</svg>
