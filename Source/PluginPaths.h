@@ -29,16 +29,17 @@ namespace PluginPaths
         return false;
     }
 
-    // First plugin binary of a branch, to test whether that build loads here.
-    inline File firstLibrary (const File& files)
+    // First plugin binary (not a GUI library) in a format folder, to test whether that build loads here.
+    inline File firstLibrary (const File& formatDir)
     {
-        for (auto sub : { "vst3", "lv2", "ladspa" })
-            for (auto& f : files.getChildFile (sub).findChildFiles (File::findFiles, true, "*.so"))
-                if (! f.getFileNameWithoutExtension().endsWithIgnoreCase ("_ui") && ! f.getFileName().containsIgnoreCase ("UI_"))
-                    return f;
+        for (auto& f : formatDir.findChildFiles (File::findFiles, true, "*.so"))
+            if (! f.getFileNameWithoutExtension().endsWithIgnoreCase ("_ui") && ! f.getFileName().containsIgnoreCase ("UI_"))
+                return f;
         return {};
     }
 
+    // Per extension and per format (vst3/lv2/ladspa), the newest branch whose plugin loads here: a build's
+    // VST3 can need a library its LV2 doesn't (sfizz's VST3 needs libxcb-cursor, its LV2 doesn't).
     inline Found flatpakPlugins (const Array<File>& roots, std::function<bool (const File&)> loads = loadsHere)
     {
         Found out;
@@ -48,17 +49,18 @@ namespace PluginPaths
                 auto branches = ext.getChildFile ("x86_64").findChildFiles (File::findDirectories, false);
                 std::sort (branches.begin(), branches.end(), [] (const File& a, const File& b)
                            { return a.getFileName().compareNatural (b.getFileName()) > 0; }); // newest first
-                for (auto& branch : branches)
-                {
-                    auto files = branch.getChildFile ("active/files");
-                    auto lib = firstLibrary (files);
-                    if (! files.isDirectory() || (lib.existsAsFile() && ! loads (lib)))
-                        continue;
-                    if (files.getChildFile ("vst3").isDirectory())   out.vst3.add (files.getChildFile ("vst3").getFullPathName());
-                    if (files.getChildFile ("lv2").isDirectory())    out.lv2.add (files.getChildFile ("lv2").getFullPathName());
-                    if (files.getChildFile ("ladspa").isDirectory()) out.ladspa.add (files.getChildFile ("ladspa").getFullPathName());
-                    break;
-                }
+                for (auto [format, list] : { std::pair { "vst3", &out.vst3 }, std::pair { "lv2", &out.lv2 }, std::pair { "ladspa", &out.ladspa } })
+                    for (auto& branch : branches)
+                    {
+                        auto dir = branch.getChildFile ("active/files").getChildFile (format);
+                        if (! dir.isDirectory())
+                            continue;
+                        auto lib = firstLibrary (dir);
+                        if (lib.existsAsFile() && ! loads (lib))
+                            continue;
+                        list->add (dir.getFullPathName());
+                        break;
+                    }
             }
         return out;
     }

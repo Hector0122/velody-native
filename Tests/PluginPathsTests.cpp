@@ -23,15 +23,23 @@ struct PluginPathsTests : UnitTest
         lib (ext ("Ratatouille", "26.08").getChildFile ("lv2/Ratatouille.lv2/Ratatouille.so"));
         lib (ext ("TAP", "25.08").getChildFile ("ladspa/tap_eq.so"));
         lib (ext ("TAP", "25.08").getChildFile ("lv2/tap-eq.lv2/tap_eq.so"));
+        // sfizz: its VST3 doesn't load anywhere (a missing library), its LV2 does.
+        lib (ext ("sfizz", "25.08").getChildFile ("vst3/sfizz.vst3/Contents/x86_64-linux/sfizz.so"));
+        lib (ext ("sfizz", "25.08").getChildFile ("lv2/sfizz.lv2/Contents/Binary/sfizz.so"));
         root.getChildFile ("org.gnome.Platform/x86_64/48").createDirectory(); // not a plugin extension
 
         StringArray tried;
-        auto loads = [&] (const File& f) { tried.add (f.getFullPathName()); return ! f.getFullPathName().contains ("Surge-XT/x86_64/26.08"); };
+        auto loads = [&] (const File& f)
+        {
+            tried.add (f.getFullPathName());
+            return ! f.getFullPathName().contains ("Surge-XT/x86_64/26.08") && ! f.getFullPathName().contains ("sfizz.vst3");
+        };
 
         beginTest ("the newest branch that loads on this system, per extension and format");
         auto found = flatpakPlugins ({ root, root.getChildFile ("missing") }, loads);
         expectEquals (found.vst3.joinIntoString ("|"), ext ("Surge-XT", "25.08").getChildFile ("vst3").getFullPathName());
-        expectEquals (found.lv2.size(), 2);
+        expectEquals (found.lv2.size(), 3);
+        expect (found.lv2.contains (ext ("sfizz", "25.08").getChildFile ("lv2").getFullPathName())); // the LV2 even if its VST3 can't
         expect (found.lv2.contains (ext ("Ratatouille", "26.08").getChildFile ("lv2").getFullPathName()));
         expect (found.lv2.contains (ext ("TAP", "25.08").getChildFile ("lv2").getFullPathName()));
         expectEquals (found.ladspa.joinIntoString ("|"), ext ("TAP", "25.08").getChildFile ("ladspa").getFullPathName());
