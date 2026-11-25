@@ -109,6 +109,8 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/LibraryAnalysis.h` — análisis en segundo plano de las canciones sin análisis.
 - `Source/PracticeMeta.h` — velocidad/tono/count-in en el `.velody`.
 - `Source/Vibes.h` — Vibes → Velody: lista de canciones mandadas desde Vibes, descarga a la cola y quitarlas de la lista.
+- `cloud-worker/` — el Worker de Cloudflare (R2 + D1) de la nube de Velody, que antes vivía en el repo de Electron; contrato de la API en `cloud-worker/src/contract.ts`. Desplegar: `cd cloud-worker && pnpm install && pnpm migrate:remote && pnpm deploy`.
+- `docs/MOBILE_APP.md` — notas de la app móvil (vienen del repo de Electron).
 - `python-worker/` — copia de los scripts de Python de Electron (Demucs, BPM, acordes).
 - `Tests/` — pruebas con `juce::UnitTest` (sin dependencias extra).
 - `libs/tracktion_engine` — submódulo; incluye JUCE. La línea de tiempo y las ventanas de plugins se reutilizan de `examples/common` del propio Tracktion.
@@ -136,7 +138,7 @@ Otros faltantes, por prioridad:
 
 - ~~Guardar velocidad/tono/count-in en el `.velody`~~ — hecho.
 - ~~Analizar en segundo plano las canciones sin análisis~~ — hecho.
-- **Imprescindible**: decidir dónde quedan `cloud-worker/` y `MOBILE_APP.md` cuando se archive el repo de Electron.
+- **Imprescindible**: ~~decidir dónde quedan `cloud-worker/` y `MOBILE_APP.md`~~ — movidos aquí (`cloud-worker/`, `docs/`).
 - ~~Volumen master y *Mix Pan*~~, ~~calidad de stems~~ — hecho.
 - ~~Puntos de recorte~~ — hecho.
 - ~~Count-in al grabar~~ — hecho (falta probarlo con la interfaz de audio).
