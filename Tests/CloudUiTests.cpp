@@ -215,7 +215,9 @@ struct CloudUiTests : UnitTest
                     break;
                 }
                 case Action::download:        c.download (a.entry, [&] (const File&, const String& e) { onDone (e); }); break;
-                case Action::removeCurrent:   c.removeLocal (a.entry, [&] (const File& f) { return f.moveToTrash(); }, onDone); break;
+                // A "trash" folder of the test's own: the system trash must not fill up with test songs.
+                case Action::removeCurrent:   c.removeLocal (a.entry, [&] (const File& f) { tmp.getChildFile ("trash").createDirectory();
+                                                                                             return f.moveFileTo (tmp.getChildFile ("trash").getNonexistentChildFile (f.getFileName(), {})); }, onDone); break;
                 case Action::deleteFromCloud: c.deleteFromCloud (a.entry, onDone); break;
                 case Action::upload:          c.upload (a.entry.name, onDone); break;
                 default:                      break;
