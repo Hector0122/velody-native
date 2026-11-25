@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(VelodyNative VERSION 0.6.0)
+project(VelodyNative VERSION 0.6.1)
 
 set(CMAKE_CXX_STANDARD 20)
 if (APPLE)

@@ -291,6 +291,18 @@ struct TimelineZoomUiTests : UnitTest
                 expect (selection.isSelected (tracks[0]->getTrack()));
                 expectEquals (tracks[0]->getHeight(), Zoom::defaultHeight);
 
+                beginTest ("opening again: tracks at their normal height even if left at the tallest zoom");
+                v.trackHeight = Zoom::maxHeight;
+                {
+                    EditComponent reopened (*edit, selection);
+                    reopened.setSize (1170, 500);
+                    pump();
+                    auto lanes = childrenOf<TrackComponent> (reopened);
+                    expectEquals (lanes[0]->getHeight(), Zoom::defaultHeight);
+                    expectEquals (lanes[1]->getY(), lanes[0]->getBottom() + 1);
+                    expect (lanes[1]->getBottom() < 500); // both on screen
+                }
+
                 beginTest ("zooming isn't an edit: Ctrl+Z doesn't bring the old zoom back");
                 edit->getUndoManager().beginNewTransaction();
                 v.setView ({ 5, 25 });

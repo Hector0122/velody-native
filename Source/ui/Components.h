@@ -65,6 +65,9 @@ public:
         viewX1.referTo (state, IDs::viewX1, nullptr, 0s);
         viewX2.referTo (state, IDs::viewX2, nullptr, 60s);
         viewY.referTo (state, IDs::viewY, nullptr, 0);
+        // Every lane's height starts normal each time the song opens (0.6.0 saved it: a song left at the
+        // tallest zoom opened with one track filling the whole screen).
+        state.removeProperty (IDs::trackHeight, nullptr);
         trackHeight.referTo (state, IDs::trackHeight, nullptr, Zoom::defaultHeight);
     }
     
