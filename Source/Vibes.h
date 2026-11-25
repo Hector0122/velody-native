@@ -75,7 +75,9 @@ namespace Vibes
     class Poller
     {
     public:
-        Poller (Import::Queue& q, File settings, File tmp) : queue (q), settingsPath (std::move (settings)), tmpRoot (std::move (tmp)) {}
+        // `library`: songs already there aren't queued again (only taken off Vibes' list).
+        Poller (Import::Queue& q, File settings, File tmp, File library = {})
+            : queue (q), settingsPath (std::move (settings)), tmpRoot (std::move (tmp)), libraryRoot (std::move (library)) {}
 
         bool active() const { return Cloud::Settings::load (settingsPath).active(); }
         bool checking() const { return busy; }
@@ -107,6 +109,13 @@ namespace Vibes
                                 const auto key = "vibes:" + send.id;
                                 if (queue.has (key))
                                     continue;
+                                // Already separated (e.g. imported before but never taken off the list): only clear it.
+                                if (libraryRoot != File() && libraryRoot.getChildFile (songName (send)).isDirectory())
+                                {
+                                    runner.run ([s, id = send.id] (const Cloud::Progress&) { Cloud::Client c (s.url, s.token); unsend (c, id); },
+                                                [] (const String&) {});
+                                    continue;
+                                }
                                 ++added;
                                 queue.addRemote (key, songName (send),
                                     [s, send, tmp = tmpRoot] (std::function<void (int)>, std::function<bool()>)
@@ -128,7 +137,7 @@ namespace Vibes
 
     private:
         Import::Queue& queue;
-        File settingsPath, tmpRoot;
+        File settingsPath, tmpRoot, libraryRoot;
         CloudUi::Runner runner;
         bool busy = false;
     };

@@ -259,4 +259,32 @@ namespace SongEdit
         }
         return missing.size();
     }
+
+    // A track with nothing in it: no clips, no effects of its own (only its fader/meter/Mix Pan), not the
+    // metronome. Leftovers like the dozens of input tracks a generic audio device made.
+    inline bool isEmptyTrack (te::AudioTrack& t)
+    {
+        if (! t.getClips().isEmpty() || t.getName() == clickTrackName)
+            return false;
+        for (auto p : t.pluginList)
+            if (dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr)
+                return false;
+        return true;
+    }
+
+    // Removes the empty tracks, keeping `keep` of them (the inputs to record on). Undoable.
+    inline int removeEmptyTracks (te::Edit& edit, int keep = 0)
+    {
+        Array<te::AudioTrack*> empty;
+        for (auto t : te::getAudioTracks (edit))
+            if (isEmptyTrack (*t))
+                empty.add (t);
+        int removed = 0;
+        for (int i = empty.size(); --i >= keep;)
+        {
+            edit.deleteTrack (empty[i]);
+            ++removed;
+        }
+        return removed;
+    }
 }

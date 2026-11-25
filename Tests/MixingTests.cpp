@@ -86,6 +86,20 @@ struct MixingTests : UnitTest
         expectEquals (Mixing::clearAutomation (*guitar), 1);
         expect (! Mixing::hasAutomation (*guitar));
 
+        beginTest ("empty tracks: removed (keeping a few for recording), the rest untouched, undoable");
+        {
+            edit->ensureNumberOfAudioTracks (te::getAudioTracks (*edit).size() + 5); // 5 empty ones
+            const int before = te::getAudioTracks (*edit).size();
+            edit->getUndoManager().beginNewTransaction();
+            expectEquals (SongEdit::removeEmptyTracks (*edit, 2), 3);
+            expectEquals (te::getAudioTracks (*edit).size(), before - 3);
+            expect (te::getAudioTracks (*edit).contains (guitar)); // has a clip
+            for (auto& b : Mixing::buses (*edit))
+                expect (te::getAudioTracks (*edit).contains (b.track)); // have their return plugin
+            edit->getUndoManager().undo();
+            expectEquals (te::getAudioTracks (*edit).size(), before);
+        }
+
         beginTest ("settings: the old ~/Velody file merges into ~/.config/Velody, its values winning");
         {
             auto oldF = dir.getChildFile ("home/Velody/Velody.settings"), newF = dir.getChildFile ("cfg/Velody/Velody.settings");

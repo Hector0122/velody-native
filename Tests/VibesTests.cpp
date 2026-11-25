@@ -116,6 +116,19 @@ struct VibesTests : UnitTest
         expectEquals (r.first, 1);
         expect (waitFor ([&] { return queue.pending() == 0; }));
 
+        beginTest ("a sent song already in the library isn't queued again, just taken off Vibes' list");
+        {
+            Vibes::Poller withLibrary (queue, settings, dl, lib);
+            queue.clearFinished();
+            post ("/_vibes?id=ccccccccccc&title=Afuera&artists=Caifanes&size=50"); // same name as one already separated
+            int added = -1;
+            withLibrary.check ([&] (int a, const String&) { added = a; });
+            expect (waitFor ([&] { return added >= 0; }));
+            expect (! queue.has ("vibes:ccccccccccc")); // (the failed "Rota" may be retried; this one isn't)
+            expect (waitFor ([&] { return ! (bool) vibesState()["ccccccccccc"]["sent"]; }));
+            expect (waitFor ([&] { return queue.pending() == 0; }));
+        }
+
         beginTest ("Vibes unreachable: an error, nothing queued");
         Cloud::Settings { "http://127.0.0.1:1", "tok", true }.save (settings);
         queue.clearFinished();

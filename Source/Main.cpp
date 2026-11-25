@@ -99,7 +99,24 @@ public:
             mixerOpen = ! mixerOpen;
             settings.setValue ("mixerOpen", mixerOpen);
             refreshMixerToggle();
+            // Folds/unfolds smoothly: the panes slide to their new place.
+            auto oldEdit = editComponent != nullptr ? editComponent->getBounds() : Rectangle<int>();
+            auto oldMixer = mixer.getBounds();
             resized();
+            auto& anim = Desktop::getInstance().getAnimator();
+            if (editComponent != nullptr)
+            {
+                auto target = editComponent->getBounds();
+                editComponent->setBounds (oldEdit);
+                anim.animateComponent (editComponent.get(), target, 1.0f, 200, false, 0.4, 0.4);
+            }
+            if (mixerOpen)
+            {
+                auto target = mixer.getBounds();
+                mixer.setBounds (oldMixer.withY (getHeight()));
+                mixer.setAlpha (0.0f);
+                anim.animateComponent (&mixer, target, 1.0f, 220, false, 0.4, 0.4);
+            }
         };
         refreshMixerToggle();
 
@@ -193,6 +210,13 @@ public:
                                    + (songLength > 0 ? "  /  " + Trim::clock (songLength) : String()), dontSendNotification);
         };
         trimTimer.startTimer (30);
+        // Autosave: what you change (mix, plugins, edits) is on disk within 30 s, even if Velody is killed.
+        autosaveTimer.fn = [this]
+        {
+            if (edit != nullptr && edit->hasChangedSinceSaved() && ! edit->getTransport().isRecording())
+                save();
+        };
+        autosaveTimer.startTimer (30 * 1000);
         chordDisplay.songTime = [this] { return edit != nullptr ? edit->getTransport().getPosition().inSeconds() * speed() : 0.0; };
         playButton.onClick = [this] { stopOrPlay (false); };
         recordButton.onClick = [this] { stopOrPlay (true); };
@@ -537,6 +561,15 @@ private:
             if (! d.isInstrument)
                 busEffects.addItem (d.name + "  (" + d.pluginFormatName + ")", [this, d] { addBus (d); });
         m.addSubMenu (String (u8"Bus de efectos (reverb, delay…)"), busEffects);
+        m.addSeparator();
+        m.addItem (String (u8"Quitar pistas vacías (deja 2 para grabar)"), [this]
+        {
+            edit->getUndoManager().beginNewTransaction();
+            const int n = SongEdit::removeEmptyTracks (*edit, 2);
+            refreshAfterEdit();
+            status.setText (n == 0 ? String (u8"No hay pistas vacías que quitar")
+                                   : String (n) + String (u8" pistas vacías quitadas (Ctrl+Z para deshacer)"), dontSendNotification);
+        });
         auto* target = instrumentTrackForClip();
         m.addItem (String (u8"Clip MIDI vacío (4 compases) para dibujar notas"), target != nullptr, false, [this]
         {
@@ -817,7 +850,7 @@ private:
         }, stemBitrate()).showMenuAsync (PopupMenu::Options().withTargetComponent (importButton));
     }
 
-    Vibes::Poller vibes { *imports, Vibes::settingsFile(), File::getSpecialLocation (File::tempDirectory) };
+    Vibes::Poller vibes { *imports, Vibes::settingsFile(), File::getSpecialLocation (File::tempDirectory), Library::defaultRoot() };
 
     // Songs without a current analysis get one in the background (metronome, count-in, chords).
     std::unique_ptr<LibraryAnalysis::Analyzer> analysis = std::make_unique<LibraryAnalysis::Analyzer> (
@@ -845,7 +878,7 @@ private:
         refreshClickTrack();
         status.setText (String (u8"Análisis listo: metrónomo, count-in y acordes"), dontSendNotification);
     }
-    struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer, trimTimer;
+    struct FnTimer : Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } } vibesTimer, trimTimer, autosaveTimer;
 
     // `manual` ("Traer de Vibes"): says what happened; the automatic checks stay quiet when offline.
     void checkVibes (bool manual)
@@ -1080,6 +1113,9 @@ private:
             selectionManager.deselectAll();
             mixer.setEdit (nullptr);
             countIn = nullptr;
+            // A soft cross-fade instead of the screen jumping: the old view fades away on top.
+            if (editComponent != nullptr && editComponent->isShowing())
+                Desktop::getInstance().getAnimator().fadeOut (editComponent.get(), 220);
             editComponent = nullptr;
             edit = nullptr;
         }
@@ -1149,6 +1185,8 @@ private:
         editComponent->getEditViewState().showWaveDevices = true;
         editComponent->getEditViewState().showMidiDevices = true;
         addAndMakeVisible (*editComponent);
+        editComponent->setAlpha (0.0f);
+        Desktop::getInstance().getAnimator().fadeIn (editComponent.get(), 260);
         fitViewToSong();
         SongEdit::setMixPan (*edit, mixPanPreference());
         mixer.setEdit (edit.get());
