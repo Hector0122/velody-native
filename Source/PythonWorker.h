@@ -33,7 +33,20 @@ namespace PythonWorker
        #endif
     }
 
-    inline File scriptsDir() { return scriptsDirFor (File::getSpecialLocation (File::currentExecutableFile)); }
+    // The running program's real path. Not File::currentExecutableFile: on Linux JUCE builds it from argv[0],
+    // and opened from the menu that's just "velody-native" (found in PATH), which became ~/velody-native, so
+    // the installed app never checked for updates. /proc/self/exe is the actual file.
+    inline File runningExe()
+    {
+       #if JUCE_LINUX
+        const File self ("/proc/self/exe");
+        if (self.isSymbolicLink())
+            return self.getLinkedTarget();
+       #endif
+        return File::getSpecialLocation (File::currentExecutableFile);
+    }
+
+    inline File scriptsDir() { return scriptsDirFor (runningExe()); }
 
     struct Message
     {

@@ -30,6 +30,34 @@ struct UpdaterTests : UnitTest
         expect (canSelfUpdate (File ("/usr/bin/velody-native")));
         expect (! canSelfUpdate (File ("/home/x/velody-native/build/Velody_artefacts/Release/Velody")));
 
+        beginTest ("Buscar actualizaciones: says why there's nothing to install");
+        expect (manualCheckMessage (true, true, "0.6.2").contains ("0.6.2"));
+        expect (manualCheckMessage (true, true, "0.6.2").contains (String (u8"más nueva")));
+        expect (manualCheckMessage (true, false, "0.6.2").contains ("internet"));
+        expect (manualCheckMessage (false, true, "0.6.2").contains (".deb"));
+
+        beginTest ("GitHub for real: an old version finds the latest .deb (skipped offline/rate-limited)");
+        {
+            bool reached = false;
+            auto u = check ("0.0.1", &reached);
+            if (reached)
+                expect (u.has_value() && u->debUrl.endsWith ("_amd64.deb") && isNewer (u->version, "0.0.1"));
+            else
+                logMessage ("GitHub not reachable: real check skipped");
+            bool reached2 = false;
+            expect (! check ("999.0.0", &reached2).has_value());
+        }
+
+        beginTest ("the running program's real path, even when started by name from PATH (the menu does that)");
+        // This test binary is started with a full path by ctest; what matters is that the answer is the
+        // real file, whatever argv[0] was: the same file /proc/self/exe points to, absolute and existing.
+        const auto exe = runningExe();
+        expect (exe.existsAsFile());
+        expect (exe == File ("/proc/self/exe").getLinkedTarget());
+        expect (exe.getFullPathName().startsWithChar ('/'));
+        // What went wrong in 0.6.1 and before: started as "velody-native" from the home folder.
+        expect (File::getSpecialLocation (File::userHomeDirectory).getChildFile ("velody-native") != installedExe);
+
         auto tmp = File::createTempFile ("velody-upd");
         tmp.createDirectory();
         StringArray commands;

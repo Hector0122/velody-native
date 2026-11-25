@@ -55,15 +55,32 @@ namespace Updater
     // Only the installed .deb updates itself (not a build from source).
     inline bool canSelfUpdate (const File& exe) { return exe == installedExe; }
 
-    // Blocking (background thread): empty when offline, rate-limited or up to date.
-    inline std::optional<Update> check (const String& current)
+    inline File runningExe() { return PythonWorker::runningExe(); }
+
+    // Ajustes → Buscar actualizaciones: what to tell when there's nothing to install.
+    inline String manualCheckMessage (bool installed, bool reached, const String& current)
     {
+        if (! installed)
+            return String (u8"Esta copia de Velody no es la instalada (.deb): se actualiza compilando de nuevo.");
+        if (! reached)
+            return String (u8"No se pudo revisar (¿sin internet?). Intenta otra vez en un rato.");
+        return String (u8"Ya tienes la versión más nueva (") + current + ").";
+    }
+
+    // Blocking (background thread): empty when offline, rate-limited or up to date.
+    // `reached`: whether GitHub answered (so «no update» means up to date, not offline).
+    inline std::optional<Update> check (const String& current, bool* reached = nullptr)
+    {
+        if (reached != nullptr)
+            *reached = false;
         int status = 0;
         auto in = URL (latestRelease).createInputStream (URL::InputStreamOptions (URL::ParameterHandling::inAddress)
                                                              .withExtraHeaders ("Accept: application/vnd.github+json\r\nUser-Agent: Velody")
                                                              .withConnectionTimeoutMs (10000).withStatusCode (&status));
         if (in == nullptr || status != 200)
             return {};
+        if (reached != nullptr)
+            *reached = true;
         return parseRelease (JSON::parse (in->readEntireStreamAsString()), current);
     }
 

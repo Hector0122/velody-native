@@ -525,6 +525,7 @@ private:
         PopupMenu m;
         m.addItem (String (u8"Interfaz de audio…"), [this] { EngineHelpers::showAudioDeviceSettings (engine); });
         m.addItem (String (u8"Plugins (VST3 / LV2)…"), [this] { showPluginScanner(); });
+        m.addItem (String (u8"Buscar actualizaciones…  (tienes la ") + ProjectInfo::versionString + ")", ! updating, false, [this] { checkForUpdate (true); });
         // Latency: the buffer (PipeWire's quantum under JACK), with the round trip it gives.
         auto* dev = engine.getDeviceManager().deviceManager.getCurrentAudioDevice();
         const double rate = dev != nullptr ? dev->getCurrentSampleRate() : 48000.0;
@@ -1318,17 +1319,37 @@ private:
     CloudUi::Runner updateRunner;
     bool updating = false;
 
-    void checkForUpdate()
+    // At start (quietly), or from Ajustes → Buscar actualizaciones (manual: says what it found, and when
+    // there's a new version goes straight to installing it).
+    void checkForUpdate (bool manual = false)
     {
-        if (! Updater::canSelfUpdate (File::getSpecialLocation (File::currentExecutableFile)))
+        const bool installed = Updater::canSelfUpdate (Updater::runningExe());
+        if (! installed)
+        {
+            if (manual)
+                AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::InfoIcon).withTitle ("Actualizaciones")
+                                            .withMessage (Updater::manualCheckMessage (false, false, ProjectInfo::versionString)).withButton ("OK", 0), nullptr);
             return; // a build from source
+        }
+        if (manual)
+            status.setText (String (u8"Buscando actualizaciones…"), dontSendNotification);
         auto found = std::make_shared<std::optional<Updater::Update>>();
-        updateRunner.run ([found] (const Cloud::Progress&) { *found = Updater::check (ProjectInfo::versionString); },
-                          [this, found] (const String&)
+        auto reached = std::make_shared<bool> (false);
+        updateRunner.run ([found, reached] (const Cloud::Progress&) { *found = Updater::check (ProjectInfo::versionString, reached.get()); },
+                          [this, found, reached, manual] (const String&)
                           {
                               update = *found;
+                              if (manual)
+                                  status.setText ({}, dontSendNotification);
                               if (! update)
+                              {
+                                  if (manual)
+                                      AlertWindow::showAsync (MessageBoxOptions().withIconType (MessageBoxIconType::InfoIcon).withTitle ("Actualizaciones")
+                                                                  .withMessage (Updater::manualCheckMessage (true, *reached, ProjectInfo::versionString)).withButton ("OK", 0), nullptr);
                                   return;
+                              }
+                              if (manual)
+                                  confirmUpdate();
                               updateButton.setButtonText ("Actualizar a " + update->version);
                               updateButton.setTooltip (String (u8"Hay una versión nueva de Velody: ") + update->version);
                               updateButton.setVisible (true);
