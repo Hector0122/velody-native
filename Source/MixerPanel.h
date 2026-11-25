@@ -2,6 +2,7 @@
 #include <JuceHeader.h>
 #include "SongEdit.h"
 #include "Theme.h"
+#include "Mixing.h"
 
 namespace te = tracktion;
 
@@ -159,6 +160,16 @@ public:
             mute.onClick = [this] { track->setMute (mute.getToggleState()); };
             solo.onClick = [this] { track->setSolo (solo.getToggleState()); };
 
+            // With Automatizar on, a fader/knob move while playing is written as automation.
+            volume.onDragStart = [this] { if (plugin != nullptr) plugin->volParam->parameterChangeGestureBegin(); };
+            volume.onDragEnd   = [this] { if (plugin != nullptr) plugin->volParam->parameterChangeGestureEnd(); };
+            pan.onDragStart    = [this] { if (plugin != nullptr) plugin->panParam->parameterChangeGestureBegin(); };
+            pan.onDragEnd      = [this] { if (plugin != nullptr) plugin->panParam->parameterChangeGestureEnd(); };
+
+            sends.setTooltip (String (u8"Envíos a los buses de efectos (una reverb para varias pistas)"));
+            sends.onClick = [this] { showSends(); };
+            addAndMakeVisible (sends);
+
             addAndMakeVisible (label);
             addAndMakeVisible (volume);
             addAndMakeVisible (pan);
@@ -181,6 +192,7 @@ public:
             auto buttons = r.removeFromTop (24);
             mute.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2).reduced (2, 1));
             solo.setBounds (buttons.reduced (2, 1));
+            sends.setBounds (r.removeFromTop (24).reduced (2, 1));
             label.setBounds (r.removeFromBottom (20));
             r.removeFromTop (4);
             meter.setBounds (r.removeFromRight (10).withTrimmedBottom (22));
@@ -188,6 +200,38 @@ public:
         }
 
         ~Row() override { trackState.removeListener (this); }
+
+        // Each bus: its send level; picking one shows a knob for it.
+        void showSends()
+        {
+            PopupMenu m;
+            auto list = Mixing::buses (track->edit);
+            for (auto& b : list)
+            {
+                if (b.track == track.get())
+                    continue;
+                const float db = Mixing::sendLevelDb (*track, b.number);
+                m.addItem (String (u8"→ ") + b.name + "   (" + (db <= -99.0f ? String (u8"apagado") : String (db, 1) + " dB") + ")",
+                           [this, n = b.number, name = b.name] { showSendKnob (n, name); });
+            }
+            if (m.getNumItems() == 0)
+                m.addItem (String (u8"No hay buses: créalo en «+ Pista → Bus de efectos»"), false, false, nullptr);
+            m.showMenuAsync (PopupMenu::Options().withTargetComponent (sends));
+        }
+
+        void showSendKnob (int bus, const String& name)
+        {
+            auto knob = std::make_unique<Slider> (Slider::RotaryHorizontalVerticalDrag, Slider::TextBoxBelow);
+            knob->setRange (-60.0, 6.0, 0.1);
+            knob->setSkewFactorFromMidPoint (-12.0);
+            knob->setTextValueSuffix (" dB");
+            knob->setValue (jmax (-60.0f, Mixing::sendLevelDb (*track, bus)), dontSendNotification);
+            knob->setDoubleClickReturnValue (true, -60.0);
+            knob->setTooltip (String (u8"Envío a ") + name + String (u8" (todo a la izquierda = apagado)"));
+            knob->onValueChange = [t = track, bus, k = knob.get()] { Mixing::setSendLevelDb (*t, bus, k->getValue() <= -59.9 ? -100.0f : (float) k->getValue()); };
+            knob->setSize (110, 120);
+            CallOutBox::launchAsynchronously (std::move (knob), sends.getScreenBounds(), nullptr);
+        }
 
         // Renamed (here or in the track header), muted or soloed elsewhere: follow it.
         void valueTreePropertyChanged (ValueTree& v, const Identifier& id) override
@@ -203,7 +247,7 @@ public:
         te::VolumeAndPanPlugin::Ptr plugin;
         Label label;
         Slider volume, pan;
-        TextButton mute { "M" }, solo { "S" };
+        TextButton mute { "M" }, solo { "S" }, sends { String (u8"Envíos") };
         Meter meter;
         ValueTree trackState;
     };

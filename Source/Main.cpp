@@ -22,6 +22,8 @@
 #include "Projects.h"
 #include "LiveMonitoring.h"
 #include "Instruments.h"
+#include "Mixing.h"
+#include "AppSettings.h"
 #include "ui/PianoRoll.h"
 #include "ui/CountInOverlay.h"
 #include "SongKey.h"
@@ -50,7 +52,7 @@ public:
         Helpers::addAndMakeVisible (*this, { &wordmark, &songTitleLabel, &songInfo, &songsButton, &projectsButton, &importButton, &exportButton, &settingsButton,
                                              &startButton, &playButton, &recordButton, &timeLabel, &chordDisplay, &trimButton, &loopButton, &clickButton, &newTrackButton, &deleteButton,
                                              &countInBox, &recordCountInBox, &soundBox, &speedLabel, &speedDown, &speedValue, &speedUp, &pitchLabel, &pitchDown, &pitchValue, &pitchUp,
-                                             &mixerToggle, &status, &mixer });
+                                             &mixerToggle, &automateButton, &clearAutomationButton, &status, &mixer });
 
         // Header: wordmark, the open song (title + BPM/trim/speed), the menus.
         songTitleLabel.setFont (Theme::title (17.0f));
@@ -58,6 +60,21 @@ public:
         songInfo.setColour (Label::textColourId, Theme::muted);
         settingsButton.onClick = [this] { showSettingsMenu(); };
         projectsButton.onClick = [this] { showProjectsMenu(); };
+        automateButton.setClickingTogglesState (true);
+        automateButton.setColour (TextButton::buttonOnColourId, Theme::record.darker (0.2f));
+        automateButton.setTooltip (String (u8"Con esto prendido, lo que muevas en el mezclador mientras suena se graba como automatización"));
+        automateButton.onClick = [this] { Mixing::setWriting (*edit, automateButton.getToggleState()); };
+        clearAutomationButton.setTooltip (String (u8"Quita la automatización de la pista seleccionada"));
+        clearAutomationButton.onClick = [this]
+        {
+            auto* t = dynamic_cast<te::AudioTrack*> (selectionManager.getSelectedObject (0));
+            if (t == nullptr)
+                return status.setText (String (u8"Selecciona una pista (clic en su nombre) para borrar su automatización"), dontSendNotification);
+            edit->getUndoManager().beginNewTransaction();
+            const int n = Mixing::clearAutomation (*t);
+            status.setText (n > 0 ? String (u8"Automatización borrada: ") + t->getName() : t->getName() + String (u8" no tiene automatización"), dontSendNotification);
+            if (editComponent != nullptr) editComponent->repaint();
+        };
         loopButton.setTooltip (String (u8"Repetir una parte: para practicarla, o para grabar varias tomas seguidas (L)"));
         loopButton.setColour (TextButton::buttonOnColourId, Theme::accent);
         loopButton.onClick = [this] { showLoopMenu(); };
@@ -313,7 +330,12 @@ public:
         mixer.setVisible (mixerOpen);
         mixer.setBounds (r.removeFromBottom (mixerH).reduced (12, 0));
         mixerBarArea = r.removeFromBottom (mixerBarH);
-        mixerToggle.setBounds (mixerBarArea.reduced (12, 3).removeFromLeft (120));
+        auto bar = mixerBarArea.reduced (12, 3);
+        mixerToggle.setBounds (bar.removeFromLeft (120));
+        bar.removeFromLeft (12);
+        automateButton.setBounds (bar.removeFromLeft (130));
+        bar.removeFromLeft (6);
+        clearAutomationButton.setBounds (bar.removeFromLeft (190));
         if (editComponent != nullptr)
             editComponent->setBounds (r);
         countInOverlay.setBounds (r);
@@ -329,7 +351,8 @@ private:
     Theme::IconButton songsButton { "Canciones", Theme::Icon::songs }, projectsButton { "Proyectos", Theme::Icon::projects },
                       importButton { "Importar", Theme::Icon::import },
                       exportButton { "Exportar", Theme::Icon::exportIcon }, settingsButton { "Ajustes", Theme::Icon::settings };
-    TextButton newTrackButton { "+ Pista" }, deleteButton { "Borrar" }, mixerToggle, clickButton { "Click" }, loopButton { "Bucle" };
+    TextButton newTrackButton { "+ Pista" }, deleteButton { "Borrar" }, mixerToggle, clickButton { "Click" }, loopButton { "Bucle" },
+               automateButton { "Automatizar" }, clearAutomationButton { String (u8"Borrar automatización") };
     TransportButton playButton { TransportButton::Kind::play, "Play" }, recordButton { TransportButton::Kind::record, "Grabar" },
                     startButton { TransportButton::Kind::start, "Inicio" };
     Label status, songTitleLabel, songInfo, timeLabel;
@@ -507,6 +530,13 @@ private:
         if (Instruments::available (engine).size() == 1)
             instruments.addItem (String (u8"¿Falta tu sintetizador? Escanea en Ajustes → Plugins"), false, false, nullptr);
         m.addSubMenu ("Pista de instrumento (MIDI)", instruments);
+        // An effect bus: one reverb/delay several tracks feed (Envíos in the mixer).
+        PopupMenu busEffects;
+        busEffects.addItem (String (u8"Vacío (le pones el efecto después)"), [this] { addBus ({}); });
+        for (auto& d : engine.getPluginManager().knownPluginList.getTypes())
+            if (! d.isInstrument)
+                busEffects.addItem (d.name + "  (" + d.pluginFormatName + ")", [this, d] { addBus (d); });
+        m.addSubMenu (String (u8"Bus de efectos (reverb, delay…)"), busEffects);
         auto* target = instrumentTrackForClip();
         m.addItem (String (u8"Clip MIDI vacío (4 compases) para dibujar notas"), target != nullptr, false, [this]
         {
@@ -515,6 +545,18 @@ private:
                     showPianoRoll (*clip);
         });
         m.showMenuAsync (PopupMenu::Options().withTargetComponent (newTrackButton));
+    }
+
+    void addBus (const PluginDescription& effect)
+    {
+        auto plugin = effect.name.isNotEmpty() ? edit->getPluginCache().createNewPlugin (te::ExternalPlugin::xmlTypeName, effect) : te::Plugin::Ptr();
+        if (auto* t = Mixing::addBus (*edit, effect.name.isNotEmpty() ? effect.name : String ("Efectos"), plugin))
+        {
+            SongEdit::setMixPan (*edit, mixPanPreference());
+            mixer.rebuild();
+            resized();
+            status.setText (t->getName() + String (u8" creado: en el mezclador, «Envíos» de cada pista manda señal a él"), dontSendNotification);
+        }
     }
 
     // The selected instrument track, else the first one.
@@ -1011,7 +1053,20 @@ private:
         exporter->start();
     }
 
-    void save() { te::EditFileOperations (*edit).save (true, true, false); }
+    static inline const Identifier cursorProp { "velodyCursor" }; // the cursor when the song was closed
+
+    void save()
+    {
+        edit->state.setProperty (cursorProp, jmax (0.0, edit->getTransport().getPosition().inSeconds()), nullptr);
+        te::EditFileOperations (*edit).save (true, true, false);
+    }
+
+public:
+    // The window as it was (size, position, maximised), across starts.
+    String savedWindowState() { return settings.getValue ("windowState"); }
+    void saveWindowState (const String& s) { settings.setValue ("windowState", s); settings.saveIfNeeded(); }
+
+private:
 
     // A new song edit gets one track per stem; reopening keeps the user's edit (mutes, plugins, takes).
     void openEdit (const File& f, const Library::Song* song)
@@ -1071,7 +1126,10 @@ private:
             if (! edit->state.hasProperty (musicStartProp))
                 edit->state.setProperty (musicStartProp, SongInfo::findMusicStart (song->stems, engine.getAudioFileFormatManager().readFormatManager), nullptr);
             musicStart = edit->state[musicStartProp];
-            if (edit->getTransport().getPosition() == te::TimePosition())
+            // Where you left it (saved with the edit), else where the music starts.
+            if (edit->state.hasProperty (cursorProp))
+                edit->getTransport().setPosition (te::TimePosition::fromSeconds ((double) edit->state[cursorProp]));
+            else
                 goToMusicStart();
         }
         startButton.setEnabled (song != nullptr);
@@ -1819,11 +1877,7 @@ public:
         // Settings used to land in ~/Velody (a visible folder in home): into ~/.config/Velody.
         auto oldSettings = File::getSpecialLocation (File::userHomeDirectory).getChildFile ("Velody/Velody.settings");
         auto newSettings = File::getSpecialLocation (File::userApplicationDataDirectory).getChildFile ("Velody/Velody.settings");
-        if (oldSettings.existsAsFile() && ! newSettings.exists())
-        {
-            newSettings.getParentDirectory().createDirectory();
-            oldSettings.moveFileTo (newSettings);
-        }
+        AppSettings::migrate (oldSettings, newSettings);
         if (oldSettings.getParentDirectory().isDirectory() && oldSettings.getParentDirectory().getNumberOfChildFiles (File::findFilesAndDirectories | File::ignoreHiddenFiles) == 0)
             oldSettings.getParentDirectory().deleteFile();
 
@@ -1847,7 +1901,15 @@ private:
             setContentOwned (new MainComponent(), true);
             setResizable (true, false);
             centreWithSize (getWidth(), getHeight());
+            if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()); main != nullptr && main->savedWindowState().isNotEmpty())
+                restoreWindowStateFromString (main->savedWindowState());
             setVisible (true);
+        }
+
+        ~MainWindow() override
+        {
+            if (auto* main = dynamic_cast<MainComponent*> (getContentComponent()))
+                main->saveWindowState (getWindowStateAsString());
         }
 
         void closeButtonPressed() override { JUCEApplication::getInstance()->systemRequestedQuit(); }

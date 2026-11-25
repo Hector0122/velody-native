@@ -1153,6 +1153,23 @@ void TrackComponent::paint (Graphics& g)
     g.setColour (Theme::outline);
     g.fillRect (getLocalBounds().removeFromBottom (1));
 
+    // Velody: the volume automation, as a line over the lane (top = +6 dB, bottom = silence).
+    if (auto* at = dynamic_cast<te::AudioTrack*> (track.get()))
+        if (auto* vp = at->getVolumePlugin(); vp != nullptr && vp->volParam->hasAutomationPoints() && getWidth() > 1)
+        {
+            Path line;
+            for (int x = 0; x < getWidth(); x += 3)
+            {
+                const auto t = editViewState.xToTime (x, getWidth());
+                const float v = vp->volParam->getCurve().getValueAt (t, vp->volParam->getCurrentValue());
+                const float y = (float) getHeight() - 4.0f - v * ((float) getHeight() - 8.0f);
+                if (x == 0) line.startNewSubPath ((float) x, y);
+                else        line.lineTo ((float) x, y);
+            }
+            g.setColour (Theme::mute.withAlpha (0.9f));
+            g.strokePath (line, PathStrokeType (1.6f));
+        }
+
     if (editViewState.selectionManager.isSelected (track.get()))
     {
         g.setColour (Theme::primary);
