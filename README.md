@@ -27,7 +27,7 @@ Es la nueva versión de Velody: reemplaza a la app de Electron (`~/Developer/vel
 - **Análisis en segundo plano**: las canciones sin análisis (o de una versión vieja del analizador; y, con Beat This! instalado, las de rejilla `fallback` o sin acordes) se analizan solas una por una con `detect_bpm.py`, como en Electron: esperan mientras se separa una canción, la que abres va primero y, al terminar, le aparecen metrónomo, count-in y acordes sin reabrirla. Un análisis fallido no se guarda (se reintenta al volver a abrir Velody). El resultado se guarda en el `.velody` y viaja con la nube.
 - **Instalación (Demucs)**: la primera vez (o si falta algo) se abre sola la ventana *Instalación*; también está en *Importar → Instalación (Demucs)…*. Busca Python 3.9–3.11 (si el sistema no tiene, como Ubuntu 24.04 con 3.12, baja un Python 3.11 portátil), crea la venv en `~/.local/share/velody/venv` e instala Demucs, PyTorch (~2 GB), librosa, yt-dlp y Beat This! (opcional), solo lo que falte. ffmpeg viene como dependencia del `.deb`. Revisar si ya está instalado es instantáneo (lee `pyvenv.cfg` y los `*.dist-info`, sin lanzar procesos). Si algo falla, muestra las últimas líneas de pip y el comando para hacerlo a mano. Es la misma carpeta que usaba la app de Electron, así que lo ya instalado se aprovecha.
 - **Audio**: elegir interfaz, entradas, frecuencia de muestreo y buffer.
-- **Plugins**: escanear VST3/LV2 (la primera vez hay que darle *Options → Scan for new or updated VST3 plug-ins*).
+- **Plugins**: escanear VST3/LV2/LADSPA (la primera vez hay que darle *Options → Scan for new or updated … plug-ins* por formato). Además de las carpetas normales (`~/.vst3`, `/usr/lib/lv2`…), Velody busca los mismos plugins de Linux que usa REAPER (flatpak): las extensiones `org.freedesktop.LinuxAudio.Plugins.*` (Surge XT, Ratatouille, SWH, TAP, AVLDrums, CMT…), eligiendo de cada una la versión más nueva que carga en este sistema (se recuerda en `~/.config/Velody/plugin-paths.cache`). Los plugins propios de REAPER (ReaEQ, ReaComp…) no: son VST2 y vienen dentro de REAPER.
 - Una pista mono por cada entrada (Scarlett 2i2 → pista 1 = entrada 1, pista 2 = entrada 2), armada, con el monitoreo apagado (se prende en **I → Input Monitoring**; con bocinas causa retroalimentación).
 - **+** en el pie de cada pista: agrega un plugin; clic en el plugin abre su ventana.
 - **Grabar / Detener**, **Play / Stop**, **+ Pista**, **Borrar** (clip, plugin o pista seleccionada).
@@ -96,6 +96,7 @@ Instala [yabridge](https://github.com/robbert-vdh/yabridge), agrega tus carpetas
 - `Source/Setup.h` — instalación inicial (Python, venv, paquetes, ffmpeg) y su ventana (port de `main/setup`).
 - `Source/RecordCountIn.h` — count-in antes de grabar (plan de clicks y punch-in).
 - `Source/SongSearch.h` — búsqueda de canciones.
+- `Source/PluginPaths.h` — los plugins de Linux de REAPER (extensiones flatpak) en las rutas de Velody.
 - `Source/Updater.h` — aviso de versión nueva e instalación del `.deb`.
 - `Source/Trim.h` — recorte de inicio/fin por canción (en el `.velody`).
 - `Source/LibraryAnalysis.h` — análisis en segundo plano de las canciones sin análisis.

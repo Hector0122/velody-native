@@ -153,6 +153,8 @@ struct CloudTests : UnitTest
         beginTest ("re-upload sends only what changed");
         expect (client()->beginUpload (id, "Song", buildManifest (song)).empty());
         write (song.getChildFile ("vocals.mp3"), String::repeatedString ("w", 2000));
+        // Same size: only the date tells it changed (a real edit is never in the same millisecond).
+        song.getChildFile ("vocals.mp3").setLastModificationTime (Time::getCurrentTime() + RelativeTime::seconds (2));
         auto ups = client()->beginUpload (id, "Song", buildManifest (song));
         expect (ups.size() == 1 && ups[0].name == "vocals.mp3");
         sync1.upload ("Song");

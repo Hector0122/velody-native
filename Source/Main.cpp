@@ -15,6 +15,7 @@
 #include "RecordCountIn.h"
 #include "SongSearch.h"
 #include "Updater.h"
+#include "PluginPaths.h"
 #include "CloudUi.h"
 #include "ImportQueue.h"
 #include "Vibes.h"
@@ -133,6 +134,7 @@ public:
         cloud.onStatus = [this] (const String& text) { status.setText (text, dontSendNotification); };
         cloud.cleanupStaleDownloads(); // a download cut off by a crash or quit
 
+        PluginPaths::addToScanPaths (engine.getPropertyStorage().getPropertiesFile(), PluginPaths::atStart());
         engine.getPluginManager().createBuiltInType<CountInPlugin>(); // before any edit that has one loads
         selectionManager.addChangeListener (this);
         engine.getDeviceManager().addChangeListener (this);
@@ -1193,7 +1195,11 @@ public:
     const String getApplicationName() override    { return "Velody"; }
     const String getApplicationVersion() override { return ProjectInfo::versionString; }
 
-    void initialise (const String&) override { window = std::make_unique<MainWindow>(); }
+    void initialise (const String&) override
+    {
+        PluginPaths::setEnvironment (PluginPaths::atStart()); // REAPER's Linux plugins, before the engine starts
+        window = std::make_unique<MainWindow>();
+    }
     void shutdown() override                 { window = nullptr; }
 
 private:
